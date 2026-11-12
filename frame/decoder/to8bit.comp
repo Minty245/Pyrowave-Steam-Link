@@ -1,0 +1,17 @@
+#version 450
+#extension GL_EXT_samplerless_texture_functions : require
+// Steam Link Pyrowave self-test: 16-bit Y / CbCr planes -> 8-bit (for the NV12 UBWC experiment).
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform texture2D uY;
+layout(set = 0, binding = 1) uniform texture2D uCbCr;
+layout(set = 0, binding = 2, r8) writeonly uniform image2D oY;
+layout(set = 0, binding = 3, rg8) writeonly uniform image2D oCbCr;
+void main()
+{
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 sz = imageSize(oY);
+    if (p.x >= sz.x || p.y >= sz.y) return;
+    imageStore(oY, p, vec4(texelFetch(uY, p, 0).r));
+    if ((p.x & 1) == 0 && (p.y & 1) == 0)
+        imageStore(oCbCr, p / 2, vec4(texelFetch(uCbCr, p / 2, 0).rg, 0.0, 0.0));
+}

@@ -1,0 +1,66 @@
+/* Pyrowave Link - shared styles. Mint #4fe0c8 (brand), pink #ff7eb6 (accent). */
+
+body, div, p, h1, h2, section, nav, header, main, label { display: block; }
+body {
+	font-family: Inter;
+	font-weight: 400;
+	font-size: 14dp;
+	color: #ededf2;
+	background-color: #0b0b0f;
+	width: 100%;
+	height: 100%;
+	margin: 0;
+	padding: 0;
+}
+.mono { font-family: "JetBrains Mono"; font-weight: 500; }
+.muted { color: #8c8c9c; }
+.row { display: flex; flex-direction: row; align-items: center; }
+.col { display: flex; flex-direction: column; }
+.grow { flex: 1 1 auto; }
+
+/* ---- scrollbars ---- */
+scrollbarvertical { width: 10dp; margin-left: 4dp; }
+scrollbarvertical slidertrack { background-color: transparent; }
+scrollbarvertical sliderbar { width: 6dp; margin-left: 2dp; border-radius: 3dp; background-color: #2a2a36; min-height: 30dp; }
+scrollbarvertical sliderbar:hover { background-color: #3a3a48; }
+scrollbarvertical sliderarrowdec, scrollbarvertical sliderarrowinc { width: 0; height: 0; }
+scrollbarcorner { width: 0; height: 0; }
+
+/* ---- range sliders: a track + fill drawn behind a transparent native slider ---- */
+.slider { position: relative; height: 26dp; }
+.slider .track { position: absolute; left: 10dp; right: 10dp; top: 10dp; height: 6dp; border-radius: 3dp; background-color: #262631; }
+.slider .fill { position: absolute; left: 0; top: 0; height: 6dp; border-radius: 3dp; background-color: #4fe0c8; }
+.slider input.range { position: absolute; left: 0; top: 0; width: 100%; height: 26dp; }
+input.range slidertrack { height: 26dp; background-color: transparent; }
+input.range sliderbar {
+	box-sizing: border-box; width: 20dp; height: 20dp; margin-top: 3dp;
+	decorator: radial-gradient(circle closest-side, #f4f4f8 52%, #4fe0c8 57%, #4fe0c8 90%, #4fe0c800 100%);
+}
+input.range sliderbar:hover, input.range sliderbar:active {
+	decorator: radial-gradient(circle closest-side, #ffffff 52%, #7eeedb 57%, #7eeedb 90%, #7eeedb00 100%);
+}
+input.range sliderarrowdec, input.range sliderarrowinc { width: 0; height: 0; }
+
+/* ---- toggle switch ---- */
+.switch { width: 44dp; height: 26dp; border-radius: 13dp; background-color: #262631; padding: 3dp; box-sizing: border-box; cursor: pointer; }
+.switch .knob { width: 20dp; height: 20dp; border-radius: 10dp; background-color: #8c8c9c; }
+.switch.on { background-color: #4fe0c8; }
+.switch.on .knob { margin-left: 18dp; background-color: #ffffff; }
+.switch:hover { background-color: #30303c; }
+.switch.on:hover { background-color: #6be8d3; }
+
+/* ---- buttons / segmented controls ---- */
+.btn {
+	display: inline-block; height: 36dp; line-height: 36dp; padding: 0 14dp; border-radius: 9dp;
+	font-size: 13dp; font-weight: 500; color: #ededf2; background-color: #1b1b24;
+	border-width: 1dp; border-color: #2a2a36; cursor: pointer; margin-right: 8dp;
+}
+.btn:hover { background-color: #22222d; }
+.btn.danger:hover { color: #ffb3d4; border-color: #ff7eb659; }
+.segs { display: flex; flex-direction: row; padding: 3dp; border-radius: 10dp; background-color: #121218; border-width: 1dp; border-color: #22222c; }
+.seg { height: 34dp; line-height: 34dp; padding: 0 14dp; border-radius: 8dp; font-size: 13dp; font-weight: 500; color: #a3a3b2; cursor: pointer; margin-right: 2dp; }
+.seg:hover { color: #ededf2; }
+
+.dot { display: inline-block; width: 8dp; height: 8dp; border-radius: 4dp; background-color: #3a3a48; }
+.badge { display: inline-block; font-size: 11dp; font-weight: 500; padding: 3dp 8dp; border-radius: 10dp; background-color: #ff7eb61a; border-width: 1dp; border-color: #ff7eb659; color: #ff9cc8; }
+.error { color: #ff9cc8; font-size: 12dp; }

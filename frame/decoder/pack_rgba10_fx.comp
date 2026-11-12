@@ -1,0 +1,66 @@
+#version 450
+#extension GL_EXT_samplerless_texture_functions : require
+#extension GL_GOOGLE_include_directive : require
+// Steam Link Pyrowave v7.21 full colour: pack_rgba10.comp with the last luma filters folded in. When the frame goes
+// to the RGBA image only (the normal full-colour case), the wide-view blur (wideblur_core.glsl) and the inset
+// sharpening (sharpen_core.glsl) are computed here per pixel instead of in their own passes, so the filtered luma
+// is never written to the 16-bit plane (or yf) and read back. Bit-identical to the separate passes: those quantise
+// to 10 bits with the same ordered dither the pack uses, and re-quantising a 10-bit value with it is exact.
+// Repeat frames: the wide views are re-presented from the history (the last result) when headset stability is on,
+// otherwise recomputed (same input, same result).
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform texture2D uY;      // decoded (seam-deblocked) luma (R16)
+layout(set = 0, binding = 1) uniform texture2D uYf;     // post-filtered luma (R16), whole tiles (tilemask)
+layout(set = 0, binding = 2) uniform sampler2D uCb;     // R16, half or full resolution
+layout(set = 0, binding = 3) uniform sampler2D uCr;
+layout(set = 0, binding = 4, rgb10_a2) writeonly uniform image2D oImg;
+layout(set = 0, binding = 5) uniform sampler2DArray uMip;        // wide-view Gaussian pyramid
+layout(set = 0, binding = 6, r16f) uniform image2DArray ioHist;  // headset stability history
+layout(push_constant) uniform PC
+{
+    vec4 a;   // dither, tile, light (1: insets sharpened inside the square), tilemask (tiles taken from yf)
+    vec4 b;   // sq0, sq1 (tile coordinates), sharpen, r0
+    vec4 c;   // r1, blur px, contrast, max_lod
+    vec4 d;   // temporal, tclamp, hist_ok, flags (1 = blur the wide views, 2 = repeat frame)
+    vec4 rp, pj0, pj1, cen;   // shared edge ramp (ramp.glsl)
+} pc;
+#include "ramp.glsl"
+#include "wideblur_core.glsl"
+#include "sharpen_core.glsl"
+
+float bayer4(ivec2 p)
+{
+    int x = p.x & 3, y = p.y & 3, q = x ^ y;
+    return float(((q & 1) << 3) | ((y & 1) << 2) | (((q >> 1) & 1) << 1) | ((y >> 1) & 1));
+}
+
+float q10(float v, float d) { return clamp(floor(v * 1023.0 + 0.5 + d), 0.0, 1023.0) / 1023.0; }
+
+void main()
+{
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 sz = imageSize(oImg);
+    if (p.x >= sz.x || p.y >= sz.y) return;
+    int T = int(pc.a.y), t = p.y / T;
+    int flags = int(pc.d.w);
+    float y;
+    if ((t & 1) != 0 && (flags & 1) != 0) {
+        ivec2 l = ivec2(p.x, p.y - t * T);
+        int z = t >> 1;
+        if ((flags & 2) != 0 && pc.d.x > 0.0)
+            y = imageLoad(ioHist, ivec3(l, z)).r;
+        else
+            y = wb_apply(l, z, texelFetch(uY, p, 0).r, pc.a.y, pc.c.y, pc.c.z, pc.c.w, (flags & 2) != 0 ? 0.0 : pc.d.x,
+                         pc.d.y, pc.d.z, 1.0 / 1023.0, pc.rp, pc.pj0, pc.pj1, pc.cen);
+    } else if (pc.a.z > 0.5) {
+        ivec2 l = ivec2(p.x, p.y - t * T);
+        bool sq = (t & 1) == 0 && l.x >= int(pc.b.x) && l.x < int(pc.b.y) && l.y >= int(pc.b.x) && l.y < int(pc.b.y);
+        y = sq ? cas_sharpen(p, sz, T, pc.b.z, pc.b.w, pc.c.x) : texelFetch(uY, p, 0).r;
+    } else
+        y = ((int(pc.a.w) >> t) & 1) != 0 ? texelFetch(uYf, p, 0).r : texelFetch(uY, p, 0).r;
+    vec2 uv = (vec2(p) + 0.5) / vec2(sz);
+    float cb = textureLod(uCb, uv, 0.0).r, cr = textureLod(uCr, uv, 0.0).r;
+    float dd = pc.a.x * ((bayer4(p) + 0.5) / 16.0 - 0.5);
+    float d2 = pc.a.x * ((bayer4(p + ivec2(2, 1)) + 0.5) / 16.0 - 0.5);   // decorrelated for chroma
+    imageStore(oImg, p, vec4(q10(cr, d2), q10(y, dd), q10(cb, -d2), 1.0));
+}

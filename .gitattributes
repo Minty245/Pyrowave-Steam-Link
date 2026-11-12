@@ -1,0 +1,8 @@
+*.sh text eol=lf
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+*.txt text eol=crlf
+*.so.1 binary
+*.dll binary
+*.a binary
+installer/frame/*.txt text eol=lf

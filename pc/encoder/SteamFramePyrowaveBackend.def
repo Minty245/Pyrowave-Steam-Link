@@ -1,0 +1,7 @@
+; Export table for SteamFramePyrowaveBackend.dll
+; SFAO looks up these symbols by name at runtime (GetProcAddress).
+LIBRARY SteamFramePyrowaveBackend
+EXPORTS
+    Av1ReadTrialIdentity
+    Av1ReadTrialStats
+    Av1CreateLegacyFunctionTable

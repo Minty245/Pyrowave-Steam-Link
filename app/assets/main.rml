@@ -1,0 +1,161 @@
+<rml>
+<head>
+	<title>Pyrowave Link</title>
+	<link type="text/rcss" href="app.rcss"/>
+	<style>
+		#root { display: flex; flex-direction: row; width: 100%; height: 100%; }
+		#nav { width: 232dp; flex: 0 0 232dp; padding: 20dp 14dp; background-color: #09090c; border-right: 1dp #1c1c24; display: flex; flex-direction: column; box-sizing: border-box; height: 100%; }
+		#brand { padding: 4dp 8dp 22dp 8dp; }
+		#brand img { width: 28dp; height: 28dp; margin-right: 10dp; }
+		#brand .name { font-size: 14dp; font-weight: 600; }
+		#brand .sub { font-size: 11dp; color: #8c8c9c; margin-top: 1dp; }
+		.navb { height: 40dp; padding: 0 12dp; border-radius: 9dp; font-size: 14dp; color: #a3a3b2; cursor: pointer; margin-bottom: 4dp; }
+		.navb:hover { background-color: #15151c; color: #ededf2; }
+		.navb.on { background-color: #16161f; color: #ededf2; border-width: 1dp; border-color: #262632; }
+		.navb .dot { width: 6dp; height: 6dp; border-radius: 3dp; margin-right: 10dp; }
+		.navb.on .dot { background-color: #4fe0c8; }
+		#live { padding: 12dp; border-radius: 10dp; background-color: #111117; border-width: 1dp; border-color: #1f1f28; }
+		#live .t { font-size: 12dp; font-weight: 500; }
+		#live .dot { margin-right: 8dp; background-color: #5f5f70; }
+		#live.on .dot { background-color: #34d399; }
+		#live .s { font-size: 11dp; color: #8c8c9c; line-height: 16dp; margin-top: 8dp; }
+
+		#main { flex: 1 1 auto; display: flex; flex-direction: column; height: 100%; }
+		#header { height: 64dp; flex: 0 0 64dp; padding: 0 28dp; border-bottom: 1dp #1c1c24; box-sizing: border-box; display: flex; flex-direction: row; align-items: center; justify-content: space-between; }
+		#header h1 { font-size: 18dp; font-weight: 600; }
+		#header .lbl { font-size: 12dp; color: #8c8c9c; margin-right: 8dp; }
+		.seg.on { background-color: #4fe0c8; color: #0b0b0f; }
+
+		#content { flex: 1 1 auto; overflow-y: auto; padding: 24dp 28dp 28dp 28dp; box-sizing: border-box; }
+
+		#stats { display: flex; flex-direction: row; margin-bottom: 18dp; }
+		.latline { font-size: 12dp; color: #8c8c9c; margin: 0 2dp 18dp 2dp; }
+		.stat { flex: 1 1 0; padding: 16dp; border-radius: 12dp; background-color: #111117; border-width: 1dp; border-color: #1f1f28; margin-right: 12dp; }
+		.stat.last { margin-right: 0; }
+		.stat .l { font-size: 12dp; color: #8c8c9c; }
+		.stat .v { font-size: 24dp; margin-top: 6dp; color: #ededf2; }
+		.stat .u { font-family: Inter; font-size: 13dp; color: #8c8c9c; font-weight: 500; margin-left: 4dp; }
+		.stat .n { font-size: 11dp; color: #8c8c9c; margin-top: 6dp; }
+		.stat.accent { border-color: #ff7eb659; box-shadow: #ff7eb614 0 0 0 1dp inset; }
+		.stat.accent .v { color: #ff9cc8; }
+
+		.card { border-radius: 14dp; background-color: #111117; border-width: 1dp; border-color: #1f1f28; margin-bottom: 18dp; }
+		.card .head { padding: 18dp 20dp 12dp 20dp; }
+		.card h2 { font-size: 14dp; font-weight: 600; }
+		.card .sub { font-size: 12dp; color: #8c8c9c; line-height: 18dp; margin-top: 4dp; }
+		.crow { padding: 14dp 20dp; border-top: 1dp #1b1b23; display: flex; flex-direction: row; align-items: center; }
+		.crow .txt { flex: 1 1 auto; margin-right: 24dp; }
+		.crow .lab { font-size: 13dp; font-weight: 500; }
+		.crow .hint { font-size: 12dp; color: #8c8c9c; line-height: 17dp; margin-top: 3dp; }
+		.crow .ctl { flex: 0 0 360dp; width: 360dp; }
+		.crow .slider { flex: 1 1 auto; margin-right: 14dp; }
+		.crow .val { width: 64dp; flex: 0 0 64dp; text-align: right; font-size: 13dp; }
+		.crow .state { font-size: 12dp; color: #8c8c9c; margin-right: 10dp; }
+		.crow .tg { justify-content: flex-end; }
+
+		#colour { border-radius: 14dp; background-color: #111117; border: 1dp #2c2c3a; padding: 22dp; display: flex; flex-direction: row; align-items: flex-start; }
+		#colour img { width: 40dp; height: 40dp; margin-right: 18dp; }
+		#colour h2 { font-size: 14dp; font-weight: 600; margin-right: 10dp; }
+		#colour p { font-size: 13dp; color: #a3a3b2; line-height: 20dp; margin-top: 8dp; max-width: 620dp; }
+		#colour .switch { opacity: 0.5; cursor: default; background-color: #1b1b24; margin-left: 18dp; }
+		#colour .switch .knob { background-color: #5f5f70; }
+		.actions { margin-bottom: 18dp; }
+		/* v2.6: Pyrowave on/off in the header, per-control Default / Mine */
+		#header .btn { margin-right: 18dp; }
+		#pyro { padding: 6dp 6dp 6dp 14dp; border-radius: 12dp; background-color: #111117; border-width: 1dp; border-color: #262632; }
+		#pyro .t { font-size: 13dp; font-weight: 500; }
+		#pyro .s { font-size: 11dp; color: #8c8c9c; margin-top: 1dp; }
+		#pyro .switch { margin-left: 14dp; }
+		.crow .rb { width: 76dp; flex: 0 0 76dp; margin-left: 14dp; }
+		.rbtn { height: 28dp; line-height: 28dp; border-radius: 8dp; text-align: center; font-size: 12dp; font-weight: 500; color: #a3a3b2;
+		        background-color: #1b1b24; border-width: 1dp; border-color: #2a2a36; cursor: pointer; }
+		.rbtn:hover { color: #ededf2; background-color: #22222d; }
+		.rbtn.mine { color: #ffb3d4; border-color: #ff7eb659; background-color: #ff7eb614; }
+	</style>
+</head>
+<body>
+<div id="root" data-model="app">
+	<div id="nav">
+		<div id="brand" class="row">
+			<img src="logo.tga"/>
+			<div class="col"><div class="name">Pyrowave Link</div><div class="sub">for Steam Frame</div></div>
+		</div>
+		<div class="navb row" data-for="n : nav" data-class-on="n.on" data-event-click="section(n.id)">
+			<span class="dot"></span><span>{{n.label}}</span>
+		</div>
+		<div class="grow"/>
+		<div id="live" data-class-on="streaming">
+			<div class="t row"><span class="dot"></span><span>{{footer_title}}</span></div>
+			<div class="s">{{footer_sub}}</div>
+		</div>
+	</div>
+
+	<div id="main">
+		<div id="header">
+			<h1>{{title}}</h1>
+			<div class="row">
+				<span class="lbl">{{tune_note}}</span>
+				<div class="btn" data-if="tune_btn != ''" data-event-click="action('tune')">{{tune_btn}}</div>
+				<div id="pyro" class="row">
+					<div class="col">
+						<span class="t">Pyrowave streaming</span>
+						<span class="s">{{enabled_note}} · applies at stream restart</span>
+					</div>
+					<div class="switch" data-class-on="enabled_on" data-event-click="toggle('general.enabled')"><div class="knob"/></div>
+				</div>
+			</div>
+		</div>
+
+		<div id="content">
+			<div class="error" data-if="error != ''" style="margin-bottom: 12dp;">{{error}}</div>
+
+			<div id="stats" data-if="section == 'stream'">
+				<div class="stat" data-for="s, i : stats" data-class-accent="s.accent" data-class-last="i == stats.size - 1">
+					<div class="l">{{s.label}}</div>
+					<div class="v mono"><span>{{s.value}}</span><span class="u">{{s.unit}}</span></div>
+					<div class="n">{{s.note}}</div>
+				</div>
+			</div>
+
+			<div class="latline" data-if="section == 'stream' &amp;&amp; latency_line != ''">{{latency_line}}</div>
+
+			<div class="row actions" data-if="section == 'advanced'">
+				<div class="btn" data-event-click="action('logs')">Open logs folder</div>
+				<div class="btn" data-event-click="action('file')">Open settings file</div>
+				<div class="btn" data-event-click="action('folder')">Open data folder</div>
+				<div class="btn danger" data-event-click="action('reset_all')">Reset to defaults</div>
+			</div>
+
+			<div class="card" data-for="c : cards">
+				<div class="head" data-if="c.title != ''">
+					<h2>{{c.title}}</h2>
+					<div class="sub" data-if="c.sub != ''">{{c.sub}}</div>
+				</div>
+				<div class="crow" data-for="r : c.rows">
+					<div class="txt">
+						<div class="lab">{{r.label}}</div>
+						<div class="hint">{{r.hint}}</div>
+					</div>
+					<div class="ctl row" data-if="r.slider">
+						<div class="slider">
+							<div class="track"><div class="fill" data-style-width="r.pct + '%'"/></div>
+							<input type="range" class="range" min="0" max="1000" step="1"
+								data-attr-value="r.pos" data-event-change="slide(r.key, ev.value)"/>
+						</div>
+						<span class="val mono">{{r.display}}</span>
+					</div>
+					<div class="ctl row tg" data-if="!r.slider">
+						<span class="state">{{r.display}}</span>
+						<div class="switch" data-class-on="r.on" data-event-click="toggle(r.key)"><div class="knob"/></div>
+					</div>
+					<div class="rb">
+						<div class="rbtn" data-if="r.btn != ''" data-class-mine="r.btn == 'Mine'" data-event-click="rowreset(r.key)">{{r.btn}}</div>
+					</div>
+				</div>
+			</div>
+
+		</div>
+	</div>
+</div>
+</body>
+</rml>

@@ -1,0 +1,41 @@
+#version 450
+#extension GL_EXT_samplerless_texture_functions : require
+// Steam Link Pyrowave: 16-bit decoded Y / Cb / Cr planes -> 8-bit Y (R8) and interleaved CbCr (R8G8),
+// with a 4x4 ordered dither so smooth gradients do not band at 8 bits.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform texture2D uY;
+layout(set = 0, binding = 1) uniform texture2D uCb;
+layout(set = 0, binding = 2) uniform texture2D uCr;
+layout(set = 0, binding = 3, r8) writeonly uniform image2D oY;
+layout(set = 0, binding = 4, rg8) writeonly uniform image2D oCbCr;
+layout(push_constant) uniform PC { float dither; float cstep; } pc;   // v7.19: cstep 2 = 4:4:4 chroma planes (box 2x2)
+
+const float bayer[16] = float[16](0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
+
+float q8(float v, ivec2 p)
+{
+    float d = pc.dither * ((bayer[(p.y & 3) * 4 + (p.x & 3)] + 0.5) / 16.0 - 0.5);
+    return clamp(floor(v * 255.0 + 0.5 + d), 0.0, 255.0) / 255.0;
+}
+
+void main()
+{
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 sz = imageSize(oY);
+    if (p.x >= sz.x || p.y >= sz.y) return;
+    imageStore(oY, p, vec4(q8(texelFetch(uY, p, 0).r, p)));
+    if ((p.x & 1) == 0 && (p.y & 1) == 0) {
+        ivec2 c = p / 2;
+        float cb, cr;
+        if (pc.cstep > 1.5) {
+            cb = 0.25 * (texelFetch(uCb, p, 0).r + texelFetch(uCb, p + ivec2(1, 0), 0).r +
+                         texelFetch(uCb, p + ivec2(0, 1), 0).r + texelFetch(uCb, p + ivec2(1, 1), 0).r);
+            cr = 0.25 * (texelFetch(uCr, p, 0).r + texelFetch(uCr, p + ivec2(1, 0), 0).r +
+                         texelFetch(uCr, p + ivec2(0, 1), 0).r + texelFetch(uCr, p + ivec2(1, 1), 0).r);
+        } else {
+            cb = texelFetch(uCb, c, 0).r;
+            cr = texelFetch(uCr, c, 0).r;
+        }
+        imageStore(oCbCr, c, vec4(q8(cb, c), q8(cr, c + 2), 0.0, 0.0));
+    }
+}

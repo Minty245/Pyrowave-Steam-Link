@@ -1,0 +1,20 @@
+#version 450
+// Steam Link Pyrowave self-test: read the client P010 surface the way vrcompositor does
+// (YCbCr sampler, RGB_IDENTITY model: r = Cr, g = Y, b = Cb), to check what the compositor would see.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D uSurface;   // immutable YCbCr sampler
+layout(set = 0, binding = 1, r16) writeonly uniform image2D uY;
+layout(set = 0, binding = 2, rg16) writeonly uniform image2D uCbCr;
+void main()
+{
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 sz = imageSize(uY);
+    if (p.x >= sz.x || p.y >= sz.y) return;
+    vec2 fs = vec2(sz);
+    imageStore(uY, p, vec4(textureLod(uSurface, (vec2(p) + 0.5) / fs, 0.0).g));
+    if ((p.x & 1) == 0 && (p.y & 1) == 0) {
+        // Midpoint chroma siting: chroma texel (p/2) is centred on the corner shared by luma (p) and (p+1).
+        vec4 c = textureLod(uSurface, (vec2(p) + 1.0) / fs, 0.0);
+        imageStore(uCbCr, p / 2, vec4(c.b, c.r, 0.0, 0.0));
+    }
+}

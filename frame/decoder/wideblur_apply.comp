@@ -1,0 +1,53 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// Steam Link Pyrowave v7.13: contrast-preserving blur of the two wide views, after decoding (in place).
+// v7.15: Gaussian pyramid (wideblur_down.comp) read with cubic B-splines instead of box mips + trilinear.
+// Same idea as the PC prefilter (slp_periph.hlsl), applied to what the codec delivered: the blurred value b at
+// lod L plus contrast restoration k * (b - b(L + 1.5)), clamped between b and the decoded pixel so it never
+// overshoots (no halos). Removes hard block edges and ringing.
+// v7.21: one source for both variants (-DWB_R16 = the v7.19 full-colour 16-bit plane, quantised to 10 bits); the
+// filter itself lives in wideblur_core.glsl, shared with the full-colour pack.
+layout(local_size_x = 16, local_size_y = 16) in;
+#ifdef WB_R16
+layout(set = 0, binding = 0, r16) uniform image2D ioY;            // decoded luma, read and written in place
+#define WB_QMAX 1023.0
+#else
+layout(set = 0, binding = 0, r8) uniform image2D ioY;
+#define WB_QMAX 255.0
+#endif
+layout(set = 0, binding = 1) uniform sampler2DArray uMip;        // the Gaussian pyramid: level 0 = half size
+layout(set = 0, binding = 2, r16f) uniform image2DArray ioHist;  // v7.17: last frame's result (headset stability)
+layout(push_constant) uniform PC
+{
+    float px;         // v7.16: blur in px at the view centre
+    float contrast;   // contrast restoration k
+    float dither;     // 0 or 1
+    float tile;       // tile size px
+    float max_lod;    // v7.14: levels - 1.5
+    float temporal;   // v7.17: headset stability 0..1 (0 = off)
+    float tclamp;     // v7.17: history clamp width
+    float hist_ok;    // v7.17: 1 = ioHist holds the previous frame
+    vec4 rp, pj0, pj1, cen;   // v7.14: shared edge ramp (ramp.glsl); rp.w = contrast overshoot
+} pc;
+#include "ramp.glsl"
+#include "wideblur_core.glsl"
+
+float bayer4(ivec2 p)
+{
+    int x = p.x & 3, y = p.y & 3, q = x ^ y;
+    return float(((q & 1) << 3) | ((y & 1) << 2) | (((q >> 1) & 1) << 1) | ((y >> 1) & 1));
+}
+
+void main()
+{
+    int T = int(pc.tile);
+    ivec2 l = ivec2(gl_GlobalInvocationID.xy);
+    if (l.x >= T || l.y >= T) return;
+    int z = int(gl_GlobalInvocationID.z);          // 0 = tile 1, 1 = tile 3
+    ivec2 p = ivec2(l.x, (2 * z + 1) * T + l.y);
+    float orig = imageLoad(ioY, p).r;
+    float o = wb_apply(l, z, orig, pc.tile, pc.px, pc.contrast, pc.max_lod, pc.temporal, pc.tclamp, pc.hist_ok,
+                       1.0 / WB_QMAX, pc.rp, pc.pj0, pc.pj1, pc.cen);
+    float dth = pc.dither * ((bayer4(p) + 0.5) / 16.0 - 0.5);
+    imageStore(ioY, p, vec4(clamp(floor(o * WB_QMAX + 0.5 + dth), 0.0, WB_QMAX) / WB_QMAX));
+}

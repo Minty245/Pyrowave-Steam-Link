@@ -1,0 +1,48 @@
+#version 450
+#extension GL_EXT_samplerless_texture_functions : require
+#extension GL_GOOGLE_include_directive : require
+// Steam Link Pyrowave v7.12: inset-only sharpening, the light path used in seam-deblock mode (the default).
+// Same contrast-adaptive sharpening (CAS) and re-dither as postfx.comp, but:
+//   - reads its 3x3 neighbourhood straight from the texture (no 32x32 shared-memory tile per 16x16 outputs),
+//   - is dispatched only over the square that contains the sharpening radius r1 of each inset; the rest of the
+//     inset is copied from the decode untouched (identical result: postfx.comp passes those pixels through).
+// Same descriptor set and push-constant size as postfx.comp, so it shares its pipeline layout.
+// v7.21: one source for both variants (-DSH_R16 = full colour, 16-bit, quantised to 10 bits); the filter is in
+// sharpen_core.glsl, shared with the full-colour pack.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform texture2D uY;               // decoded (and seam-deblocked) luma
+#ifdef SH_R16
+layout(set = 0, binding = 1, r16) writeonly uniform image2D oY;  // sharpened luma
+#define SH_QMAX 1023.0
+#else
+layout(set = 0, binding = 1, r8) writeonly uniform image2D oY;
+#define SH_QMAX 255.0
+#endif
+layout(push_constant) uniform PC
+{
+    float x0;          // first column of this dispatch
+    float unused0;
+    float sharpen;     // 0..1 CAS sharpness
+    float r0, r1;      // full inside r0, fades to 0 at r1 (fractions of the tile half-size)
+    float dither;      // 0 or 1
+    float tile;        // tile size px
+    float y0;          // first row of this dispatch
+    float unused1;
+} pc;
+#include "sharpen_core.glsl"
+
+float bayer4(ivec2 p)
+{
+    int x = p.x & 3, y = p.y & 3, q = x ^ y;
+    return float(((q & 1) << 3) | ((y & 1) << 2) | (((q >> 1) & 1) << 1) | ((y >> 1) & 1));
+}
+
+void main()
+{
+    ivec2 sz = imageSize(oY);
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy) + ivec2(int(pc.x0), int(pc.y0));
+    if (p.x >= sz.x || p.y >= sz.y) return;
+    float o = cas_sharpen(p, sz, int(pc.tile), pc.sharpen, pc.r0, pc.r1);
+    float dth = pc.dither * ((bayer4(p) + 0.5) / 16.0 - 0.5);
+    imageStore(oY, p, vec4(clamp(floor(o * SH_QMAX + 0.5 + dth), 0.0, SH_QMAX) / SH_QMAX));
+}

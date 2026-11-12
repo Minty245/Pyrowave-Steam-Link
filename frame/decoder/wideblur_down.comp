@@ -1,0 +1,70 @@
+#version 450
+#extension GL_EXT_samplerless_texture_functions : require
+// Steam Link Pyrowave v7.15: Gaussian pyramid of the two wide views (atlas tiles 1 and 3) for the peripheral blur.
+// Each level = 6-tap binomial low-pass (1 5 10 10 5 1)/32 of the level above, then every second pixel (the taps are
+// centred between the two source pixels each output covers). Unlike the v7.13 2x2 box mips this removes the detail
+// above the new Nyquist before halving, so the levels do not alias and the blur moves smoothly with the picture.
+// Level 0 = half size from the decoded luma; layer 0 = tile 1, layer 1 = tile 3. Edges clamp inside the view.
+// v7.21 (fast = 1): the same weights read with bilinear filtering, 3 x 3 taps instead of 6 x 6 fetches (each tap
+// pair (1 5), (10 10), (5 1) is one bilinear read at the pair's weighted position). Only level 0's first and last
+// rows use the 36 fetches (there the window reaches into the neighbouring atlas tile, which the sampler cannot
+// clamp); elsewhere clamp-to-edge does what the index clamp did. Differs from the exact sum only by the hardware's
+// filter-weight precision (a fraction of a 10-bit step).
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform texture2D uY;          // decoded (seam-deblocked) luma
+layout(set = 0, binding = 1) uniform texture2DArray uMip;   // the pyramid (reads level - 1)
+layout(set = 0, binding = 2, r16f) writeonly uniform image2DArray oMip;   // this level
+layout(set = 0, binding = 3) uniform sampler2D sY;          // v7.21: uY with a bilinear sampler
+layout(set = 0, binding = 4) uniform sampler2DArray sMip;   // v7.21: uMip with a bilinear sampler
+layout(push_constant) uniform PC { int level; int tile; int fast; } pc;
+
+const float kW[6] = float[6](1.0, 5.0, 10.0, 10.0, 5.0, 1.0);
+const float kO[3] = float[3](0.5 + 5.0 / 6.0, 3.0, 4.5 + 1.0 / 6.0);   // pair positions (texel units from b)
+const float kP[3] = float[3](6.0, 20.0, 6.0);                          // pair weights
+
+void main()
+{
+    ivec3 d = ivec3(gl_GlobalInvocationID.xy, gl_GlobalInvocationID.z);
+    ivec2 sz = imageSize(oMip).xy;
+    if (d.x >= sz.x || d.y >= sz.y) return;
+    ivec2 src = sz * 2;                       // source size (one view)
+    ivec2 b = d.xy * 2 - 2;
+    float acc = 0.0;
+    int y0 = (2 * d.z + 1) * pc.tile;         // level 0: the view's first atlas row
+    if (pc.fast != 0 && (pc.level > 0 || (d.y > 0 && d.y < sz.y - 1))) {
+        if (pc.level == 0) {
+            vec2 inv = 1.0 / vec2(textureSize(sY, 0));
+            for (int j = 0; j < 3; j++) {
+                float row = 0.0;
+                float v = (float(y0 + b.y) + kO[j]) * inv.y;
+                for (int i = 0; i < 3; i++)
+                    row += kP[i] * textureLod(sY, vec2((float(b.x) + kO[i]) * inv.x, v), 0.0).r;
+                acc += kP[j] * row;
+            }
+        } else {
+            vec2 inv = 1.0 / vec2(src);
+            float lev = float(pc.level - 1);
+            for (int j = 0; j < 3; j++) {
+                float row = 0.0;
+                float v = (float(b.y) + kO[j]) * inv.y;
+                for (int i = 0; i < 3; i++)
+                    row += kP[i] * textureLod(sMip, vec3((float(b.x) + kO[i]) * inv.x, v, float(d.z)), lev).r;
+                acc += kP[j] * row;
+            }
+        }
+        imageStore(oMip, d, vec4(acc / 1024.0));
+        return;
+    }
+    for (int j = 0; j < 6; j++) {
+        int y = clamp(b.y + j, 0, src.y - 1);
+        float row = 0.0;
+        for (int i = 0; i < 6; i++) {
+            int x = clamp(b.x + i, 0, src.x - 1);
+            float v = pc.level == 0 ? texelFetch(uY, ivec2(x, y0 + y), 0).r
+                                    : texelFetch(uMip, ivec3(x, y, d.z), pc.level - 1).r;
+            row += kW[i] * v;
+        }
+        acc += kW[j] * row;
+    }
+    imageStore(oMip, d, vec4(acc / 1024.0));
+}

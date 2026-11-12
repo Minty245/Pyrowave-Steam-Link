@@ -1,0 +1,12 @@
+# build output
+/build/
+/dist/
+frame/decoder/out/
+frame/decoder/out-x86/
+frame/layer/out/
+# old snapshots, logs and experiments kept locally only
+/_archive/
+*.log
+selftest-*.txt
+stall-*.tar.gz
+power-*.txt

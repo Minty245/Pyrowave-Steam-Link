@@ -1,0 +1,76 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// Steam Link Pyrowave: seam deblock, in place on the decoded luma plane (v7.9; v7.10: coarse seams).
+// Pyrowave codes each wavelet band in 8x8 coefficient blocks (quantised per 32x32), so its block artifacts sit on a
+// grid in the picture: every 16 px for the finest band, every 32 / 64 px (and more) for the coarser ones. One pass
+// handles one grid: it looks at the 2R pixels straddling each grid line (R = 4 for the 16-px grid, 8 for 32, 16 for
+// 64) and only when the step across the line looks like an artifact (small step, flat on both sides next to it).
+// It then removes most of the step with a smooth ramp added over R pixels on each side. Texture inside the blocks is
+// kept: an offset is added, nothing is averaged away.
+// dir 0: vertical grid lines, one thread per (row, line); dir 1: horizontal lines, one thread per (column, line).
+// Lines whose 2R pixels would cross an atlas tile border are skipped. Lines are >= 4R apart: no races.
+layout(local_size_x = 64) in;
+layout(set = 0, binding = 0, r8) uniform image2D Y;
+layout(push_constant) uniform PC
+{
+    float alpha_inset;  // largest step treated as an artifact on the insets (luma units); 0 = off
+    float alpha_wide;   // same for the wide views
+    float tile;         // tile size px
+    float dir;          // 0 = vertical lines, 1 = horizontal lines
+    float grid;         // 16, 32 or 64
+    float ramp;         // R: 4, 8 or 16
+    float alpha_max;    // v7.14: cap for the ramped wide-view alpha (= deblock 1.0)
+    float pad0, pad1, pad2, pad3, pad4;   // the vec4s below start at byte 48
+    vec4 rp, pj0, pj1, cen;   // v7.14: shared edge ramp (ramp.glsl)
+} pc;
+#include "ramp.glsl"
+
+void main()
+{
+    ivec2 sz = imageSize(Y);
+    int T = int(pc.tile), GRID = int(pc.grid), R = int(pc.ramp);
+    uint id = gl_GlobalInvocationID.x;
+    bool horiz = pc.dir > 0.5;
+    int nlines = horiz ? (sz.y / GRID) : (sz.x / GRID);
+    int along = horiz ? sz.x : sz.y;
+    int line = int(id) / along + 1;          // grid lines 1 .. nlines-1 (0 and the far edge are image borders)
+    int pos = int(id) % along;
+    if (line >= nlines) return;
+    int b = line * GRID;                     // first pixel after the line
+    if (horiz && ((b - R) / T) != ((b + R - 1) / T)) return;   // would cross into another view
+    int tile_i = horiz ? (b / T) : (pos / T);
+    float alpha = ((tile_i & 1) == 0) ? pc.alpha_inset : pc.alpha_wide;
+    if (alpha <= 0.0) return;
+
+    ivec2 o = horiz ? ivec2(pos, b) : ivec2(b, pos);
+    // v7.14: wide views deblock harder away from the gaze (shared ramp), never past deblock 1.0
+    if ((tile_i & 1) == 1 && pc.rp.x > 0.0)
+    {
+        vec2 tp = (vec2(o.x, o.y - tile_i * T) + 0.5) / float(T);
+        alpha = min(alpha * ramp_mult(tp, tile_i >> 1, pc.rp, pc.pj0, pc.pj1, pc.cen), max(alpha, pc.alpha_max));
+    }
+    ivec2 st = horiz ? ivec2(0, 1) : ivec2(1, 0);
+    float p0 = imageLoad(Y, o - st).r, p1 = imageLoad(Y, o - 2 * st).r;
+    float q0 = imageLoad(Y, o).r, q1 = imageLoad(Y, o + st).r;
+    int h = R / 2;
+    float ph = imageLoad(Y, o - (h + 1) * st).r, qh = imageLoad(Y, o + h * st).r;
+
+    // Step across the line; for the coarse grids use 2-pixel means (less sensitive to texture / dither noise).
+    float step = (R > 4) ? 0.5 * ((q0 + q1) - (p0 + p1)) : (q0 - p0);
+    float beta = 0.5 * alpha;
+    // artifact test: the step is small and each side is flat next to the line (else it is real detail / an edge)
+    if (abs(step) >= alpha || abs(p1 - p0) >= beta || abs(q1 - q0) >= beta || abs(ph - p0) >= alpha ||
+        abs(qh - q0) >= alpha)
+        return;
+    // fade the correction out as the step approaches alpha (no hard on/off flicker between frames)
+    float k = 1.0 - smoothstep(0.5 * alpha, alpha, abs(step));
+    float d = step * k;
+    // ramp over R px each side: weights (R - 0.5 - i) / (2R) -> the step shrinks to 1/(2R) of its size
+    float inv2r = 1.0 / float(2 * R);
+    for (int i = 0; i < R; ++i) {
+        float w = (float(R) - 0.5 - float(i)) * inv2r;
+        ivec2 pp = o - (i + 1) * st, qq = o + i * st;
+        imageStore(Y, pp, vec4(clamp(imageLoad(Y, pp).r + d * w, 0.0, 1.0)));
+        imageStore(Y, qq, vec4(clamp(imageLoad(Y, qq).r - d * w, 0.0, 1.0)));
+    }
+}

@@ -1,0 +1,52 @@
+#version 450
+#extension GL_EXT_samplerless_texture_functions : require
+// Steam Link Pyrowave v7.19 full colour: pack the decoded picture into the shared 10-bit RGBA image that
+// vrcompositor samples instead of vrlink's NV12 surface: R = Cr, G = Y, B = Cb (exactly what its RGB_IDENTITY
+// YCbCr conversion returned before, so the compositor's colour matrix is untouched). Ordered dither to 10 bits.
+// Chroma: 4:4:4 frames read full-resolution planes at texel centres (exact); 4:2:0 frames read half-resolution
+// planes with a linear sampler at the same positions, i.e. the midpoint-sited bilinear upsampling the compositor's
+// NV12 conversion did.
+// Luma: the decoded plane, or the post-filtered copy (yf) where the post-filter wrote one (light sharpen square of
+// the insets, or whole tiles), mirroring the luma copies of the NV12 path.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform texture2D uY;      // decoded / deblocked / blurred luma (R16)
+layout(set = 0, binding = 1) uniform texture2D uYf;     // post-filtered luma (R16)
+layout(set = 0, binding = 2) uniform sampler2D uCb;     // R16, half or full resolution
+layout(set = 0, binding = 3) uniform sampler2D uCr;
+layout(set = 0, binding = 4, rgb10_a2) writeonly uniform image2D oImg;
+layout(push_constant) uniform PC
+{
+    float dither;       // 0 or 1
+    float tile;         // tile size px
+    float light;        // 1: insets use yf inside the square [sq0, sq1) (tile coordinates)
+    float sq0, sq1;
+    float tilemask;     // otherwise: bit t set = tile t is taken from yf
+} pc;
+
+float bayer4(ivec2 p)
+{
+    int x = p.x & 3, y = p.y & 3, q = x ^ y;
+    return float(((q & 1) << 3) | ((y & 1) << 2) | (((q >> 1) & 1) << 1) | ((y >> 1) & 1));
+}
+
+float q10(float v, float d) { return clamp(floor(v * 1023.0 + 0.5 + d), 0.0, 1023.0) / 1023.0; }
+
+void main()
+{
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 sz = imageSize(oImg);
+    if (p.x >= sz.x || p.y >= sz.y) return;
+    int T = int(pc.tile), t = p.y / T;
+    bool fromf;
+    if (pc.light > 0.5) {
+        ivec2 l = ivec2(p.x, p.y - t * T);
+        fromf = (t & 1) == 0 && l.x >= int(pc.sq0) && l.x < int(pc.sq1) && l.y >= int(pc.sq0) && l.y < int(pc.sq1);
+    } else
+        fromf = ((int(pc.tilemask) >> t) & 1) != 0;
+    float y = fromf ? texelFetch(uYf, p, 0).r : texelFetch(uY, p, 0).r;
+    vec2 uv = (vec2(p) + 0.5) / vec2(sz);
+    float cb = textureLod(uCb, uv, 0.0).r, cr = textureLod(uCr, uv, 0.0).r;
+    float d = pc.dither * ((bayer4(p) + 0.5) / 16.0 - 0.5);
+    float d2 = pc.dither * ((bayer4(p + ivec2(2, 1)) + 0.5) / 16.0 - 0.5);   // decorrelated for chroma
+    imageStore(oImg, p, vec4(q10(cr, d2), q10(y, d), q10(cb, -d2), 1.0));
+}

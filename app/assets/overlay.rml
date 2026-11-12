@@ -1,0 +1,112 @@
+<rml>
+<head>
+	<title>Pyrowave Link overlay</title>
+	<link type="text/rcss" href="app.rcss"/>
+	<style>
+		body { background-color: #0b0b0f; }
+		#root { padding: 28dp 32dp; box-sizing: border-box; background-color: #0b0b0f; width: 100%; }
+		#top { justify-content: space-between; margin-bottom: 20dp; }
+		#top img { width: 40dp; height: 40dp; margin-right: 14dp; }
+		#top .name { font-size: 20dp; font-weight: 600; }
+		#top .sub { font-size: 14dp; color: #8c8c9c; margin-top: 2dp; }
+		.chip { height: 40dp; line-height: 38dp; padding: 0 14dp; border-radius: 20dp; background-color: #121218; border-width: 1dp; border-color: #22222c; font-size: 14dp; color: #c9c9d4; margin-left: 10dp; }
+		.chip .dot { margin-right: 8dp; }
+		.chip.k1 { border-color: #ff7eb659; color: #ffb3d4; }
+		.chip.k1 .dot { background-color: #ff7eb6; }
+		.chip.k2 .dot { background-color: #4fe0c8; }
+		.chip.k3 .dot { background-color: #a3a3b2; }
+
+		#bar { justify-content: space-between; margin-bottom: 20dp; }
+		.tabs { display: flex; flex-direction: row; padding: 5dp; border-radius: 16dp; background-color: #121218; border-width: 1dp; border-color: #22222c; }
+		.tabb { height: 52dp; line-height: 52dp; padding: 0 22dp; border-radius: 12dp; font-size: 17dp; font-weight: 500; color: #a3a3b2; cursor: pointer; margin-right: 6dp; }
+		.tabb:hover { color: #ededf2; }
+		.tabb.on { background-color: #4fe0c8; color: #0b0b0f; }
+		.segs { padding: 5dp; border-radius: 16dp; }
+		.seg { height: 52dp; line-height: 52dp; padding: 0 16dp; border-radius: 12dp; font-size: 15dp; margin-right: 4dp; }
+		.seg.on { background-color: #ff7eb624; color: #ffb3d4; border-width: 1dp; border-color: #ff7eb673; line-height: 50dp; }
+
+		#card { border-radius: 16dp; background-color: #111117; border-width: 1dp; border-color: #1f1f28; padding: 4dp 24dp; }
+		.orow { min-height: 92dp; display: flex; flex-direction: row; align-items: center; border-bottom: 1dp #1b1b23; }
+		.orow.last { border-bottom-width: 0; }
+		.orow .txt { width: 260dp; flex: 0 0 260dp; margin-right: 24dp; }
+		.orow .lab { font-size: 18dp; font-weight: 500; }
+		.orow .hint { font-size: 14dp; color: #8c8c9c; margin-top: 4dp; }
+		.orow .ctl { flex: 1 1 auto; margin-right: 24dp; }
+		.orow .val { width: 88dp; flex: 0 0 88dp; text-align: right; font-size: 20dp; }
+
+		/* bigger hit targets for laser pointers */
+		.orow .slider { height: 40dp; }
+		.orow .slider .track { left: 16dp; right: 16dp; top: 15dp; height: 10dp; border-radius: 5dp; }
+		.orow .slider .fill { height: 10dp; border-radius: 5dp; }
+		.orow .slider input.range, .orow input.range slidertrack { height: 40dp; }
+		.orow input.range sliderbar { width: 32dp; height: 32dp; margin-top: 4dp; border-width: 0; background-color: transparent; decorator: radial-gradient(circle closest-side, #f4f4f8 55%, #4fe0c8 58%, #4fe0c8 94%, #4fe0c800 100%); }
+		.orow .tg { display: flex; flex-direction: row; justify-content: flex-end; }
+		.orow .switch { width: 72dp; height: 40dp; border-radius: 20dp; padding: 5dp; }
+		.orow .switch .knob { width: 30dp; height: 30dp; border-radius: 15dp; }
+		.orow .switch.on .knob { margin-left: 32dp; }
+
+		#foot { justify-content: space-between; margin-top: 20dp; }
+		#foot .muted { font-size: 14dp; }
+		.pill { height: 52dp; line-height: 50dp; padding: 0 20dp; border-radius: 12dp; font-size: 16dp; font-weight: 500; background-color: #1b1b24; border-width: 1dp; border-color: #2a2a36; cursor: pointer; }
+		.pill:hover { background-color: #22222d; }
+		/* v2.6: per-control Default / Mine, tune A/B */
+		.tn { font-size: 15dp; margin-right: 14dp; }
+		.orow .rb { width: 112dp; flex: 0 0 112dp; margin-left: 18dp; }
+		.rbtn { height: 48dp; line-height: 46dp; border-radius: 12dp; text-align: center; font-size: 16dp; font-weight: 500; color: #a3a3b2;
+		        background-color: #1b1b24; border-width: 1dp; border-color: #2a2a36; cursor: pointer; }
+		.rbtn:hover { color: #ededf2; background-color: #22222d; }
+		.rbtn.mine { color: #ffb3d4; border-color: #ff7eb659; background-color: #ff7eb614; }
+	</style>
+</head>
+<body>
+<div id="root" data-model="app">
+	<div id="top" class="row">
+		<div class="row">
+			<img src="logo.tga"/>
+			<div class="col"><div class="name">Pyrowave Link</div><div class="sub">Changes apply instantly</div></div>
+		</div>
+		<div class="row">
+			<div class="chip row" data-for="c : chips" data-class-k1="c.kind == 1" data-class-k2="c.kind == 2" data-class-k3="c.kind == 3"><span class="dot"></span><span>{{c.text}}</span></div>
+		</div>
+	</div>
+
+	<div id="bar" class="row">
+		<div class="tabs">
+			<div class="tabb" data-for="t : tabs" data-class-on="t.on" data-event-click="tab(t.id)">{{t.label}}</div>
+		</div>
+		<div class="row">
+			<span class="muted tn">{{tune_note}}</span>
+			<div class="pill" data-if="tune_btn != ''" data-event-click="action('tune')">{{tune_btn}}</div>
+		</div>
+	</div>
+
+	<div id="card">
+		<div class="orow" data-for="r : rows" data-class-last="r.last">
+			<div class="txt">
+				<div class="lab">{{r.label}}</div>
+				<div class="hint">{{r.hint}}</div>
+			</div>
+			<div class="ctl" data-if="r.slider">
+				<div class="slider">
+					<div class="track"><div class="fill" data-style-width="r.pct + '%'"/></div>
+					<input type="range" class="range" min="0" max="1000" step="1"
+						data-attr-value="r.pos" data-event-change="slide(r.key, ev.value)"/>
+				</div>
+			</div>
+			<div class="ctl tg" data-if="!r.slider">
+				<div class="switch" data-class-on="r.on" data-event-click="toggle(r.key)"><div class="knob"/></div>
+			</div>
+			<span class="val mono">{{r.display}}</span>
+			<div class="rb">
+				<div class="rbtn" data-if="r.btn != ''" data-class-mine="r.btn == 'Mine'" data-event-click="rowreset(r.key)">{{r.btn}}</div>
+			</div>
+		</div>
+	</div>
+
+	<div id="foot" class="row">
+		<span class="muted">More settings in the desktop app</span>
+		<div class="pill" data-event-click="action('reset_tab')">Reset tab</div>
+	</div>
+</div>
+</body>
+</rml>

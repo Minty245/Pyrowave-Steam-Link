@@ -1,0 +1,17 @@
+{
+    "file_format_version": "1.2.0",
+    "layer": {
+        "name": "VK_LAYER_SLP_observe",
+        "type": "GLOBAL",
+        "library_path": "@LIBPATH@",
+        "api_version": "1.3.0",
+        "implementation_version": "1",
+        "description": "Steam Link Pyrowave: Pyrowave decoding in vrlink and full colour in vrcompositor (inert in every other process, and in these two unless enabled in ~/.local/lib/slp)",
+        "functions": {
+            "vkNegotiateLoaderLayerInterfaceVersion": "vkNegotiateLoaderLayerInterfaceVersion"
+        },
+        "disable_environment": {
+            "SLP_LAYER_DISABLE": "1"
+        }
+    }
+}

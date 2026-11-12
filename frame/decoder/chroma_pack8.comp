@@ -1,0 +1,17 @@
+#version 450
+#extension GL_EXT_samplerless_texture_functions : require
+// Steam Link Pyrowave: interleave the decoded Cb and Cr planes (R16_UNORM each)
+// into one R8G8_UNORM image (8-bit direct mode) that is then copied into plane 1 of the P010 surface.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform texture2D uCb;
+layout(set = 0, binding = 1) uniform texture2D uCr;
+layout(set = 0, binding = 2, rg8) writeonly uniform image2D uCbCr;
+void main()
+{
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 sz = imageSize(uCbCr);
+    if (p.x >= sz.x || p.y >= sz.y) return;
+    float cb = texelFetch(uCb, p, 0).r;
+    float cr = texelFetch(uCr, p, 0).r;
+    imageStore(uCbCr, p, vec4(cb, cr, 0.0, 0.0));
+}
