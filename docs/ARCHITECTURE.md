@@ -1,9 +1,8 @@
 # How Steam Link Pyrowave works
 
-Steam Link already renders a foveated **atlas** on the PC: four square views stacked vertically (per eye a sharp
-gaze-following *inset* and a *wide* view), encodes it with NVENC HEVC, sends it, and on the Frame decodes it with the
-hardware decoder and composes the views. Steam Link Pyrowave replaces only the codec and leaves the rest of that
-pipeline to Steam Link.
+Steam Link renders a foveated **atlas** on the PC, encodes it with NVENC on NVIDIA or AMF on AMD, sends it, and on the
+Frame decodes it with the hardware decoder and composes the views. Steam Link Pyrowave replaces only the codec and
+leaves the rest of that pipeline to Steam Link.
 
 ## PC (`pc/`)
 
@@ -11,15 +10,17 @@ pipeline to Steam Link.
   `SteamFramePyrowaveBackend.dll` next to it and hands it SteamVR's driver-input interface (for the gaze). Off switch
   for testing: `%TEMP%\slp_driver_disabled`.
 - **`pc/encoder`** - the backend.
-  - `slp_nvenc_hook.cpp`: patches `driver_vrlink.dll`'s imports of `NvEncodeAPICreateInstance` / `D3D11CreateDevice`
-    (only that module) and replaces entries of the NVENC function table. With Pyrowave on, NVENC is bypassed: the
-    hooks answer vrlink's EncodePicture / LockBitstream / Reconfigure calls, so vrlink's pacing, FEC and stats see a
-    normal encoder. vrlink's live bitrate target sets the budget.
+  - `slp_nvenc_hook.cpp` and `slp_amf_hook.cpp`: intercept the encoder entry points imported by `driver_vrlink.dll`.
+    NVENC's function table and AMF's factory/context/`AMFVideoEncoderVCE_HEVC` component are wrapped. In AMF mode,
+    submitted frames use the tracked original RGBA16F atlas and encoded output is replaced with an SLPW frame.
+    NVENC and AMF bitrate targets feed Pyrowave's live bitrate budget; the stock encoder path remains available when
+    substitution is off.
   - `slp_periph.cpp` + `slp_periph.hlsl` / `slp_pyr.hlsl`: the foveated prefilter on vrlink's D3D11 device - a Gaussian
-    pyramid of the atlas, per-pixel blur from the angle to the gaze (acuity model, the edge ramp, colour-only blur that keeps each
-    pixel's linear luminance),
-    contrast restoration. Gaze from `slp_gaze.cpp` (SteamVR driver input, calibrated against the picture).
-  - `slp_shadow.cpp`: shares the atlas with a Vulkan device (shared texture + fence) and encodes it with Pyrowave
+    pyramid of four vertically stacked square views, per-pixel blur from the angle to the gaze (acuity model, the edge
+    ramp, colour-only blur that keeps each pixel's linear luminance), and contrast restoration. Gaze from
+    `slp_gaze.cpp` (SteamVR driver input, calibrated against the picture).
+  - `slp_shadow.cpp`: shares the atlas with a Vulkan device (D3D11 NT shared texture + fence; the texture-handle flags
+    match Vulkan's D3D11 texture import contract on AMD as well) and encodes it with Pyrowave
     (4:2:0, or 4:4:4 with full colour) with the fork's region weights and per-tile CSF. For 4:2:0 the fork can do the
     RGB to YCbCr step like Steam Link's HEVC path: an 8-tap chroma downsample clamped to each view, and luma
     adjustment (luma solved so the decoded pixel keeps the source's luminance). Output: one **SLPW frame** per

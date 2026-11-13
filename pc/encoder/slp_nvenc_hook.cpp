@@ -131,6 +131,8 @@ using PFN_CreateInstance = NVENCSTATUS (NVENCAPI *)(void *);
 
 static std::atomic<FARPROC> g_orig_create{nullptr};
 static std::atomic<FARPROC> g_orig_gpa{nullptr};
+static std::atomic<FARPROC> g_orig_amf_init{nullptr};
+static std::atomic<bool> g_amf_off_logged{false};
 
 static std::atomic<void *> g_orig_encode{nullptr};
 static std::atomic<void *> g_orig_lock{nullptr};
@@ -258,8 +260,9 @@ static std::atomic<ID3D11DeviceContext *> g_probe_ctx{nullptr};
 static std::atomic<bool> g_probe_installed{false};
 static std::atomic<ID3D11DeviceContextVtbl *> g_probe_ctx_vt{nullptr};
 static std::atomic<ID3D11DeviceVtbl *>        g_probe_dev_vt{nullptr};
-static std::atomic<ID3D11Texture2D *> g_atlas_tex{nullptr};      // R16G16B16A16_FLOAT 1344x5376 (RGB atlas)
-static std::atomic<ID3D11Texture2D *> g_sharedyuv_tex{nullptr};  // shared P010 1344x5376 (conversion target)
+static std::atomic<ID3D11Texture2D *> g_atlas_tex{nullptr};      // R16G16B16A16_FLOAT (RGB atlas)
+static std::atomic<ID3D11Texture2D *> g_sharedyuv_tex{nullptr};  // shared P010 conversion target
+static std::mutex g_atlas_mutex;
 
 static void fmt_tex(ID3D11Resource *res, char *out, size_t n)
 {
@@ -293,9 +296,9 @@ static HRESULT STDMETHODCALLTYPE hook_CreateTexture2D(ID3D11Device *d, const D3D
     const D3D11_SUBRESOURCE_DATA *init, ID3D11Texture2D **out)
 {
     HRESULT hr = g_co.CreateTexture2D(d, desc, init, out);
-    // v23: any atlas size (4 stacked square views: height = 4 x width). vrlink sizes it at stream start.
+    // Identify vrlink's atlas by format and bind flags; its aspect ratio varies by configuration.
     // Our own shadow slots (shared NT, misc 0x800) are not the atlas.
-    if (SUCCEEDED(hr) && desc && out && *out && desc->Width >= 256 && desc->Height == 4 * desc->Width) {
+    if (SUCCEEDED(hr) && desc && out && *out && desc->Width >= 256 && desc->Height >= 256) {
         ID3D11Texture2D *keep = nullptr;
         std::atomic<ID3D11Texture2D *> *slot = nullptr;
         // vrlink's atlas is exactly bind SRV|RTV (0x28), no misc flags, one mip. Our own textures (shadow slots
@@ -308,7 +311,14 @@ static HRESULT STDMETHODCALLTYPE hook_CreateTexture2D(ID3D11Device *d, const D3D
             // Newest wins (a stream restart can bring a new atlas); the old one is released.
             keep = *out;
             keep->lpVtbl->AddRef(keep);
-            if (ID3D11Texture2D *old = slot->exchange(keep)) old->lpVtbl->Release(old);
+            ID3D11Texture2D *old = nullptr;
+            if (slot == &g_atlas_tex) {
+                std::lock_guard<std::mutex> lk(g_atlas_mutex);
+                old = slot->exchange(keep);
+            } else {
+                old = slot->exchange(keep);
+            }
+            if (old) old->lpVtbl->Release(old);
             slp_log("[SLP] remembered %s texture %p (%ux%u)", desc->Format == 10 ? "RGB-atlas" : "shared-P010", (void *)keep,
                     desc->Width, desc->Height);
         }
@@ -320,6 +330,19 @@ static HRESULT STDMETHODCALLTYPE hook_CreateTexture2D(ID3D11Device *d, const D3D
                 (unsigned)desc->Usage, desc->ArraySize, (unsigned long)hr, (void *)d, GetCurrentThreadId());
     return hr;
 }
+
+void slp_nvenc_get_shadow_source(ID3D11DeviceContext **ctx_out, ID3D11Texture2D **atlas_out)
+{
+    if (!ctx_out || !atlas_out) return;
+    *ctx_out = g_probe_ctx.load(std::memory_order_acquire);
+    if (*ctx_out) (*ctx_out)->lpVtbl->AddRef(*ctx_out);
+    {
+        std::lock_guard<std::mutex> lk(g_atlas_mutex);
+        *atlas_out = g_atlas_tex.load(std::memory_order_acquire);
+        if (*atlas_out) (*atlas_out)->lpVtbl->AddRef(*atlas_out);
+    }
+}
+
 template <typename F>
 static void patch_vt_slot(F *slot_ptr, F hook, F *orig_out)
 {
@@ -907,13 +930,18 @@ static NVENCSTATUS NVENCAPI hook_EncodePicture(void *encoder, void *params)
     bool will_result = false;
     void *ev = (real_picture && g_async.load() == 1) ? pp_in->completionEvent : nullptr;
     if (real_picture) {
+        ID3D11DeviceContext *shadow_ctx = nullptr;
+        ID3D11Texture2D *atlas = nullptr;
+        slp_nvenc_get_shadow_source(&shadow_ctx, &atlas);
         void *ring = nullptr;
         {
             std::lock_guard<std::mutex> lk(g_tex_mutex);
             for (size_t i = 0; i < g_texes.size(); ++i)
                 if (g_texes[i].mapped && g_texes[i].mapped == pp_in->inputBuffer) { ring = g_texes[i].tex; break; }
         }
-        will_result = slp_shadow_frame(g_probe_ctx.load(), g_atlas_tex.load(), static_cast<ID3D11Texture2D *>(ring), n, ev);
+        will_result = slp_shadow_frame(shadow_ctx, atlas, static_cast<ID3D11Texture2D *>(ring), n, ev);
+        if (atlas) atlas->lpVtbl->Release(atlas);
+        if (shadow_ctx) shadow_ctx->lpVtbl->Release(shadow_ctx);
         if (g_bypass.load() == -1 && slp_substitute_active()) {
             int b = temp_flag_exists("slp_keep_nvenc") ? 0 : 1;
             g_bypass.store(b);
@@ -981,6 +1009,17 @@ static NVENCSTATUS NVENCAPI hook_EncodePicture(void *encoder, void *params)
 
 // v20: the ~0.2 s average of vrlink's target (single-frame jitter removed).
 double slp_vrlink_avg_bps() { double f = g_vrlink_fast_bps.load(); return f > 0 ? f : (double)g_vrlink_avg_bps.load(); }
+void slp_vrlink_amf_target_bps(uint64_t target_bps)
+{
+    if (!target_bps || target_bps > UINT32_MAX) return;
+    const uint32_t target = static_cast<uint32_t>(target_bps);
+    const uint32_t previous = g_vrlink_avg_bps.exchange(target);
+    g_vrlink_fast_bps.store(static_cast<double>(target));
+    if (previous != target) {
+        slp_log("[SLP] AMF target bitrate %.1f Mbps", target / 1e6);
+        slp_status_set("vrlink_target_mbps", target / 1e6);
+    }
+}
 uint64_t slp_vrlink_dips_take() { return g_vrlink_dips.exchange(0); }
 
 // v17 substitution: per output-bitstream buffer we keep the Pyrowave bytes handed to vrlink
@@ -1065,10 +1104,8 @@ static void append_ramp(std::vector<uint8_t> &buf)
     buf.insert(buf.end(), b, b + sizeof(b));
 }
 
-static void substitute_bitstream(NV_ENC_LOCK_BITSTREAM *lb, uint64_t encode_index)
+static bool build_substitute_packet(uint64_t encode_index, std::vector<uint8_t> &buf)
 {
-    std::lock_guard<std::mutex> lk(g_sub_mutex);
-    std::vector<uint8_t> &buf = subbuf_for(lb->outputBitstream);
     buf.clear();
     bool have = encode_index && slp_shadow_take_frame(encode_index, buf, 30);
     if (!have) {
@@ -1082,13 +1119,27 @@ static void substitute_bitstream(NV_ENC_LOCK_BITSTREAM *lb, uint64_t encode_inde
     append_ramp(buf);
     append_frame_settings(buf);
     g_sub_bytes.fetch_add(buf.size());
-    lb->bitstreamBufferPtr = buf.data();
-    lb->bitstreamSizeInBytes = (uint32_t)buf.size();
     uint64_t total = g_sub_frames.load() + g_sub_repeats.load();
     if (total <= 3 || total % 720 == 0)
-        slp_log("[SUB] frame #%llu: %s, %u bytes (totals: %llu Pyrowave, %llu repeat)", (unsigned long long)encode_index,
-                have ? "Pyrowave" : "REPEAT", lb->bitstreamSizeInBytes, (unsigned long long)g_sub_frames.load(),
+        slp_log("[SUB] frame #%llu: %s, %zu bytes (totals: %llu Pyrowave, %llu repeat)", (unsigned long long)encode_index,
+                have ? "Pyrowave" : "REPEAT", buf.size(), (unsigned long long)g_sub_frames.load(),
                 (unsigned long long)g_sub_repeats.load());
+    return have;
+}
+
+bool slp_substitute_packet(uint64_t encode_index, std::vector<uint8_t> &buf)
+{
+    std::lock_guard<std::mutex> lk(g_sub_mutex);
+    return build_substitute_packet(encode_index, buf);
+}
+
+static void substitute_bitstream(NV_ENC_LOCK_BITSTREAM *lb, uint64_t encode_index)
+{
+    std::lock_guard<std::mutex> lk(g_sub_mutex);
+    std::vector<uint8_t> &buf = subbuf_for(lb->outputBitstream);
+    build_substitute_packet(encode_index, buf);
+    lb->bitstreamBufferPtr = buf.data();
+    lb->bitstreamSizeInBytes = (uint32_t)buf.size();
 }
 
 static NVENCSTATUS NVENCAPI hook_LockBitstream(void *encoder, void *params)
@@ -1238,6 +1289,9 @@ static FARPROC WINAPI hook_GetProcAddress(HMODULE m, LPCSTR name)
         slp_log("[SLP] GetProcAddress(NvEncodeAPICreateInstance) intercepted");
         return reinterpret_cast<FARPROC>(hook_NvEncodeAPICreateInstance);
     }
+    extern FARPROC slp_amf_hook_get_proc(HMODULE, LPCSTR, FARPROC);
+    FARPROC amf = slp_amf_hook_get_proc(m, name, r);
+    if (amf != r) return amf;
     return r;
 }
 
@@ -1340,18 +1394,29 @@ static void scan_modules_once(std::set<HMODULE> &seen, const std::wstring_view w
         int c = patch_module_import(m, "D3D11CreateDevice",
             reinterpret_cast<FARPROC>(hook_D3D11CreateDevice), &g_orig_create_device,
             [](const char *d) { return istarts(d, "d3d11"); });
+        extern FARPROC slp_amf_init_hook_proc();
+        extern void slp_amf_hook_set_init_original(FARPROC);
+        int d = 0;
+        if (temp_flag_exists("slp_amf_off")) {
+            if (!g_amf_off_logged.exchange(true))
+                slp_log("[AMF] interception disabled by %%TEMP%%\\slp_amf_off");
+        } else {
+            d = patch_module_import(m, "AMFInit", slp_amf_init_hook_proc(), &g_orig_amf_init,
+                [](const char *dll) { return istarts(dll, "amfrt64"); });
+            if (d) slp_amf_hook_set_init_original(g_orig_amf_init.load());
+        }
         if (c) {
             char narrow[MAX_PATH];
             WideCharToMultiByte(CP_ACP, 0, path, -1, narrow, MAX_PATH, nullptr, nullptr);
             const char *leaf = std::strrchr(narrow, '\\');
             slp_log("[SLP] patched D3D11CreateDevice import in %s", leaf ? leaf + 1 : narrow);
         }
-        if (a || b) {
+        if (a || b || d) {
             char narrow[MAX_PATH];
             WideCharToMultiByte(CP_ACP, 0, path, -1, narrow, MAX_PATH, nullptr, nullptr);
             const char *leaf = std::strrchr(narrow, '\\');
-            slp_log("[SLP] patched imports in %s: CreateInstance=%d GetProcAddress=%d",
-                    leaf ? leaf + 1 : narrow, a, b);
+            slp_log("[SLP] patched imports in %s: CreateInstance=%d GetProcAddress=%d AMFInit=%d",
+                    leaf ? leaf + 1 : narrow, a, b, d);
         }
     }
 }
@@ -1385,7 +1450,7 @@ bool slp_nvenc_hook_install()
         slp_log("[SLP] could not start module scan thread");
         return false;
     }
-    slp_log("[SLP] NVENC function-table hook armed (observe-only); waiting for a stream to start");
+    slp_log("[SLP] NVENC/AMF hooks armed; waiting for a stream to start");
     return true;
 }
 
