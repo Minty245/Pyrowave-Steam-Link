@@ -32,6 +32,7 @@ set(PYROWAVE_LIB "" CACHE FILEPATH "Pyrowave import library (auto-detected if em
 add_library(SteamFramePyrowaveBackend SHARED
     SteamFramePyrowaveBackend.cpp
     slp_nvenc_hook.cpp
+    slp_amf_hook.cpp
     slp_shadow.cpp
     slp_periph.cpp
     slp_gaze.cpp
@@ -71,6 +72,10 @@ target_include_directories(SteamFramePyrowaveBackend PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/nvenc   # official nvEncodeAPI.h (NVENC 11.1)
     ${PYROWAVE_DIR}              # pyrowave.h
 )
+target_compile_definitions(SteamFramePyrowaveBackend PRIVATE NOMINMAX)
+if(MSVC)
+    target_compile_definitions(SteamFramePyrowaveBackend PRIVATE D3D11_NO_HELPERS)
+endif()
 if(VULKAN_INCLUDE_DIR)
     target_include_directories(SteamFramePyrowaveBackend PRIVATE ${VULKAN_INCLUDE_DIR})
 endif()
