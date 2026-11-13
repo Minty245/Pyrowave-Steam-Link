@@ -38,4 +38,4 @@ $cmd = "set -e; cd /tmp && rm -rf '$dir' && tar -xzf '$($pkg.Name)' && bash '$di
 Write-Host 'Installing on the Frame...'
 & ssh.exe -t $target $cmd
 if ($LASTEXITCODE -ne 0) { throw 'Install on the Frame failed (see the messages above).' }
-Write-Host 'Headset part installed. Restart SteamVR on the Frame (or reboot it).' -ForegroundColor Green
+Write-Host 'Headset part installed. Reboot the Frame to load it.' -ForegroundColor Green

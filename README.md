@@ -49,11 +49,12 @@ Download both packages from the release page.
   `sudo systemctl enable --now sshd`), then double-click `Install-Frame.cmd` in the PC package and enter the Frame's
   address. You type the password when asked; it is not stored.
 
-Then restart SteamVR on the Frame (or reboot it). Everything on the Frame lives in your home folder
-(`~/.local/lib/slp` and one Vulkan layer manifest); nothing in the system or in SteamVR's files is changed.
+Then reboot the Frame (restarting only SteamVR can leave some of its processes on the previous version). Everything on
+the Frame lives in your home folder (`~/.local/lib/slp` and one Vulkan layer manifest); nothing in the system or in
+SteamVR's files is changed.
 
 **Full colour** (optional): run `./install.sh --full-colour` on the Frame (or answer "y" in `Install-Frame.cmd`),
-restart SteamVR there, then switch *Full colour* on in Pyrowave Link. Only switch it on in the app when the Frame has
+reboot the Frame, then switch *Full colour* on in Pyrowave Link. Only switch it on in the app when the Frame has
 it enabled: otherwise the headset shows no picture.
 
 ## Use
@@ -70,7 +71,7 @@ Pyrowave Link (the default); switching it takes effect when the stream restarts.
 
 - PC: *Settings > Apps > Steam Link Pyrowave*, or `Uninstall.cmd` in the install folder. Your settings stay in
   `%LOCALAPPDATA%\SteamLinkPyrowave` unless you run `Uninstall.ps1 -RemoveSettings`.
-- Frame: `~/.local/lib/slp/uninstall.sh`, then restart SteamVR there. To switch the headset part off without removing
+- Frame: `~/.local/lib/slp/uninstall.sh`, then reboot the Frame. To switch the headset part off without removing
   it: `touch ~/.local/lib/slp/DISABLED`.
 
 ## Troubleshooting

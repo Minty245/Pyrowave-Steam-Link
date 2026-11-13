@@ -5,7 +5,7 @@
   decoder receives Pyrowave frames it cannot decode. Check `/tmp/slp_layer/` on the Frame: a `vrlink-*.log` with
   "Pyrowave decoder ... ready" means it is working.
 - *Full colour* on in Pyrowave Link but not enabled on the Frame gives no picture: switch it off in the app, or run
-  `./install.sh --full-colour` on the Frame and restart SteamVR there.
+  `./install.sh --full-colour` on the Frame and reboot it.
 - If it happens now and then: run `~/.local/lib/slp/tools/collect_stall.sh` on the Frame while it is stuck and attach
   the archive to a bug report (addresses and IDs are redacted).
 

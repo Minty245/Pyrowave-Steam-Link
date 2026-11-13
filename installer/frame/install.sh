@@ -46,5 +46,5 @@ case "$FC" in
 esac
 if [ -e "$LIBDIR/DISABLED" ]; then echo "note: ~/.local/lib/slp/DISABLED exists, so the layer stays off until you remove it"; fi
 echo
-echo "Installed to $LIBDIR. Restart SteamVR on the Frame (or reboot) to load it."
+echo "Installed to $LIBDIR. Reboot the Frame to load it (restarting only SteamVR can leave processes on the old version)."
 echo "Remove it again with: $LIBDIR/uninstall.sh"

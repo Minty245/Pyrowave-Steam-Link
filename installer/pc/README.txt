@@ -9,10 +9,10 @@ Steam Link Pyrowave - PC package
      open Konsole in that folder, run ./install.sh
    - From this PC over SSH: double-click Install-Frame.cmd and enter the Frame's address (needs SSH enabled on the
      Frame: in Konsole run "passwd" once, then "sudo systemctl enable --now sshd").
-   Then restart SteamVR on the Frame.
+   Then reboot the Frame.
 4. Start SteamVR and connect with Steam Link. Pyrowave Link (Start menu, or the SteamVR dashboard) has the settings.
 
-Full colour (optional): install the Frame part with --full-colour (Install-Frame.cmd asks), restart SteamVR
+Full colour (optional): install the Frame part with --full-colour (Install-Frame.cmd asks), reboot the Frame
 on the Frame, then switch "Full colour" on in Pyrowave Link. Without it enabled on the Frame the headset shows no picture.
 
 Uninstall: Settings > Apps > Steam Link Pyrowave (keeps your settings; Uninstall.ps1 -RemoveSettings removes them).

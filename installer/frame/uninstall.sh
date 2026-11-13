@@ -10,6 +10,6 @@ rm -f "$LIBDIR"/libslp_layer.so "$LIBDIR"/libslp_pyrodec.so "$LIBDIR"/libpyrowav
 rm -rf "$LIBDIR/tools"
 rmdir "$LIBDIR" 2>/dev/null || true
 rm -f /tmp/slp_arm /tmp/slp_arm_compositor /tmp/slp_decode /tmp/slp_fullcolour
-echo "Steam Link Pyrowave removed from the Frame. Restart SteamVR on the Frame (or reboot)."
+echo "Steam Link Pyrowave removed from the Frame. Reboot the Frame to finish."
 [ -d "$LIBDIR" ] && echo "note: $LIBDIR still has files that are not ours: $(ls -A "$LIBDIR" | tr '\n' ' ')"
 exit 0
