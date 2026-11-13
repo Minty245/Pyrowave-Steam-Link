@@ -63,6 +63,8 @@ cp "$ROOT/installer/pc/"*.ps1 "$ROOT/installer/pc/"*.cmd "$ROOT/installer/pc/REA
 cp "$D/$F.tar.gz" "$PS/frame/"
 cp "$ROOT/LICENSE" "$PS/LICENSE.txt"; cp "$ROOT/THIRD_PARTY_NOTICES.md" "$PS/THIRD_PARTY_NOTICES.txt"
 echo "$VERSION" > "$PS/VERSION"
+# Windows line endings for the scripts and text files people open on the PC (cmd.exe needs CRLF to be safe)
+for f in "$PS"/*.ps1 "$PS"/*.cmd "$PS"/*.txt; do sed -i 's/\r*$/\r/' "$f"; done
 x86_64-w64-mingw32-strip "$PS/driver/slp/bin/win64/"*.dll "$PS/app/PyrowaveLink/PyrowaveLink.exe" 2>/dev/null || true
 ( cd "$B/stage" && rm -f "$D/$P.zip" && zip -qr "$D/$P.zip" "$P" )
 ls -la "$D"

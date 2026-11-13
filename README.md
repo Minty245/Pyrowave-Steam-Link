@@ -49,9 +49,10 @@ Download both packages from the release page.
   `sudo systemctl enable --now sshd`), then double-click `Install-Frame.cmd` in the PC package and enter the Frame's
   address. You type the password when asked; it is not stored.
 
-Then reboot the Frame (restarting only SteamVR can leave some of its processes on the previous version). Everything on
-the Frame lives in your home folder (`~/.local/lib/slp` and one Vulkan layer manifest); nothing in the system or in
-SteamVR's files is changed.
+Both ways offer to reboot the Frame at the end: say yes. Restarting only SteamVR can leave some of its processes on
+the previous version, and the Frame may then not shut down cleanly the first time. Everything on the Frame lives in
+your home folder (`~/.local/lib/slp` and one Vulkan layer manifest); nothing in the system or in SteamVR's files is
+changed.
 
 **Full colour** (optional): run `./install.sh --full-colour` on the Frame (or answer "y" in `Install-Frame.cmd`),
 reboot the Frame, then switch *Full colour* on in Pyrowave Link. Only switch it on in the app when the Frame has

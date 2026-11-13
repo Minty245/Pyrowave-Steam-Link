@@ -9,7 +9,7 @@ Steam Link Pyrowave - PC package
      open Konsole in that folder, run ./install.sh
    - From this PC over SSH: double-click Install-Frame.cmd and enter the Frame's address (needs SSH enabled on the
      Frame: in Konsole run "passwd" once, then "sudo systemctl enable --now sshd").
-   Then reboot the Frame.
+   Both offer to reboot the Frame at the end: say yes (without it, the Frame may not shut down cleanly the first time).
 4. Start SteamVR and connect with Steam Link. Pyrowave Link (Start menu, or the SteamVR dashboard) has the settings.
 
 Full colour (optional): install the Frame part with --full-colour (Install-Frame.cmd asks), reboot the Frame

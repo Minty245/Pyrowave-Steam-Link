@@ -2,7 +2,8 @@ Steam Link Pyrowave - Steam Frame package
 =========================================
 
 Install / update:   ./install.sh                 (add --full-colour for 4:4:4 10-bit; see below)
-Then reboot the Frame, so every SteamVR process loads the new version.
+It offers to reboot the Frame at the end: say yes, so every SteamVR process loads the new version (without the
+reboot the Frame may not shut down cleanly the first time).
 
 Everything goes to your home folder: ~/.local/lib/slp and ~/.local/share/vulkan/implicit_layer.d/slp_layer.json.
 Nothing in the system or in SteamVR is changed. The layer decodes Pyrowave streams; HEVC streams stay on the

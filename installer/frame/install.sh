@@ -1,10 +1,12 @@
 #!/bin/bash
-# Steam Link Pyrowave - install the headset part on the Steam Frame (user space only: no sudo, nothing outside ~/.local).
+# Steam Link Pyrowave - install the headset part on the Steam Frame (user space only: nothing outside ~/.local;
+# sudo only if you choose to reboot and the reboot needs it).
 #
 #   ./install.sh                 install / update
 #   ./install.sh --full-colour   also enable full colour (4:4:4, 10-bit into the compositor); turn "Full colour" on
 #                                in Pyrowave Link on the PC afterwards
 #   ./install.sh --no-full-colour   install / update and turn full colour off
+#   --reboot / --no-reboot       reboot the Frame afterwards without asking / don't (default: ask)
 #
 # Writes only:
 #   ~/.local/lib/slp/                         libraries, settings files, tools, uninstall.sh
@@ -17,14 +19,37 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 LIBDIR="$HOME/.local/lib/slp"
 MANDIR="$HOME/.local/share/vulkan/implicit_layer.d"
 FC=keep
+REBOOT=ask
 for a in "$@"; do
   case "$a" in
     --full-colour|--full-color) FC=on ;;
     --no-full-colour|--no-full-color) FC=off ;;
+    --reboot) REBOOT=yes ;;
+    --no-reboot) REBOOT=no ;;
     -h|--help) sed -n '2,15p' "$0"; exit 0 ;;
     *) echo "unknown option: $a (see --help)"; exit 1 ;;
   esac
 done
+# Offer the reboot that finishes the change. Restarting only SteamVR can leave some of its processes on the previous
+# version of the layer, and the Frame may then not shut down cleanly the next time.
+offer_reboot() {   # $1 = install | removal
+  local ans="$REBOOT"
+  if [ "$ans" = ask ]; then
+    if [ -t 0 ]; then
+      echo "Reboot the Frame now to finish the $1? If you don't, reboot it soon: until then the Frame may not shut down"
+      read -r -p "cleanly the first time (hold the power button if it hangs). Reboot now? [Y/n] " ans || ans=n
+      case "$ans" in [nN]*) ans=no ;; *) ans=yes ;; esac
+    else
+      ans=no
+    fi
+  fi
+  if [ "$ans" = yes ]; then
+    echo "Rebooting..."
+    systemctl reboot 2>/dev/null || sudo systemctl reboot
+  else
+    echo "Not rebooting. Reboot the Frame before using it, or it may not shut down cleanly the first time."
+  fi
+}
 [ "$(uname -m)" = aarch64 ] || { echo "This is the Steam Frame part (aarch64); this machine is $(uname -m)."; exit 1; }
 VERSION="$(cat "$HERE/VERSION" 2>/dev/null || echo dev)"
 echo "Steam Link Pyrowave $VERSION - headset install"
@@ -46,5 +71,5 @@ case "$FC" in
 esac
 if [ -e "$LIBDIR/DISABLED" ]; then echo "note: ~/.local/lib/slp/DISABLED exists, so the layer stays off until you remove it"; fi
 echo
-echo "Installed to $LIBDIR. Reboot the Frame to load it (restarting only SteamVR can leave processes on the old version)."
-echo "Remove it again with: $LIBDIR/uninstall.sh"
+echo "Installed to $LIBDIR. Remove it again with: $LIBDIR/uninstall.sh"
+offer_reboot install
