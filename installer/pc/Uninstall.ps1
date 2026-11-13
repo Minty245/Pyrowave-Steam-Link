@@ -16,6 +16,10 @@ $steam = $null
 try { $steam = (Get-ItemProperty 'HKCU:\SOFTWARE\Valve\Steam' -Name SteamPath).SteamPath } catch {}
 if (-not $steam) { $steam = Join-Path ${Env:ProgramFiles(x86)} 'Steam' }
 $vrpathreg = Join-Path $steam 'steamapps\common\SteamVR\bin\win64\vrpathreg.exe'
+$saved = Join-Path $dest 'vrpathreg.path'   # written by the installer
+if (Test-Path $saved) {
+    try { $s = (Get-Content -Raw $saved).Trim(); if ([System.IO.File]::Exists($s)) { $vrpathreg = $s } } catch {}
+}
 if (Test-Path $vrpathreg) {
     & $vrpathreg removedriver (Join-Path $dest 'driver\slp') | Out-Null
     Write-Host 'Unregistered the SteamVR driver.'

@@ -22,15 +22,21 @@ function Find-VrPathReg {
     try { $steam = (Get-ItemProperty 'HKCU:\SOFTWARE\Valve\Steam' -Name SteamPath).SteamPath } catch {}
     if (-not $steam) { $steam = Join-Path ${Env:ProgramFiles(x86)} 'Steam' }
     $candidates = @((Join-Path $steam 'steamapps\common\SteamVR\bin\win64\vrpathreg.exe'))
-    # SteamVR can live in another Steam library folder
+    # SteamVR can live in another Steam library folder. libraryfolders.vdf can still list libraries on drives or
+    # folders that no longer exist: skip those instead of failing (Join-Path throws for a missing drive, so the
+    # paths are built with .NET and every check is guarded).
     $lib = Join-Path $steam 'steamapps\libraryfolders.vdf'
     if (Test-Path $lib) {
-        foreach ($m in (Select-String -Path $lib -Pattern '"path"\s+"([^"]+)"' -AllMatches).Matches) {
-            $p = $m.Groups[1].Value -replace '\\\\', '\'
-            $candidates += (Join-Path $p 'steamapps\common\SteamVR\bin\win64\vrpathreg.exe')
-        }
+        try {
+            foreach ($m in (Select-String -Path $lib -Pattern '"path"\s+"([^"]+)"' -AllMatches).Matches) {
+                $p = $m.Groups[1].Value -replace '\\\\', '\'
+                try { $candidates += [System.IO.Path]::Combine($p, 'steamapps\common\SteamVR\bin\win64\vrpathreg.exe') } catch {}
+            }
+        } catch { Write-Warning "Could not read $lib ($($_.Exception.Message)); looking in the main Steam folder only." }
     }
-    foreach ($c in $candidates) { if (Test-Path $c) { return $c } }
+    foreach ($c in $candidates) {
+        try { if ([System.IO.File]::Exists($c)) { return $c } } catch {}
+    }
     throw 'SteamVR not found (vrpathreg.exe). Install SteamVR from Steam first.'
 }
 
@@ -65,6 +71,8 @@ foreach ($f in 'Uninstall.ps1', 'Uninstall.cmd', 'VERSION', 'README.txt', 'LICEN
     $src = Join-Path $here $f
     if (Test-Path $src) { Copy-Item -Force $src $dest }
 }
+# Remember where SteamVR's vrpathreg is, for the uninstaller (SteamVR may live in another library folder)
+Set-Content -Encoding UTF8 -Path (Join-Path $dest 'vrpathreg.path') -Value $vrpathreg
 Write-Host "Installed files to $dest"
 
 # SteamVR driver. SteamVR keeps its external driver list in %LOCALAPPDATA%\openvr\openvrpaths.vrpath (JSON);
