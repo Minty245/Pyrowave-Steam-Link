@@ -776,6 +776,10 @@ DWORD WINAPI worker_main(LPVOID)
 // D3D11 slot textures (shared NT handles for the Vulkan import), atlas-sized. Releases any previous ones.
 bool make_d3d_slots(ID3D11Device *dev, const D3D11_TEXTURE2D_DESC &ad)
 {
+    constexpr UINT kVulkanD3D11TextureMiscFlags =
+        D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE;
+    static_assert((kVulkanD3D11TextureMiscFlags & D3D11_RESOURCE_MISC_SHARED) != 0,
+                  "NT shared textures also require the shared-resource flag");
     HRESULT hr;
     for (int i = 0; i < kSlots; ++i) {
         safe_release(g_slots[i].tex);
@@ -785,7 +789,11 @@ bool make_d3d_slots(ID3D11Device *dev, const D3D11_TEXTURE2D_DESC &ad)
         d.Usage = D3D11_USAGE_DEFAULT;
         d.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
         d.CPUAccessFlags = 0;
-        d.MiscFlags = D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE;
+        // VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D11_TEXTURE_BIT imports the NT handle
+        // returned by IDXGIResource1::CreateSharedHandle. Keep this paired with
+        // SHARED_NTHANDLE on AMD as well; the legacy GetSharedHandle/KMT pairing
+        // has different ownership semantics and is not interchangeable.
+        d.MiscFlags = kVulkanD3D11TextureMiscFlags;
         hr = dev->lpVtbl->CreateTexture2D(dev, &d, nullptr, &g_slots[i].tex);
         if (FAILED(hr) || !g_slots[i].tex) {
             slp_log("[SHADOW] slot %d CreateTexture2D failed 0x%08lx", i, (unsigned long)hr);
@@ -881,7 +889,8 @@ bool start_on_encoder_thread(ID3D11DeviceContext *ctx, ID3D11Texture2D *atlas)
     dev->lpVtbl->Release(dev);
     if (!ok) return false;
 
-    slp_log("[SHADOW] D3D11 side ready: %u slots of %ux%u RGBA16F (shared NT), shared fence", kSlots, g_width, g_height);
+    slp_log("[SHADOW] D3D11 side ready: %u slots of %ux%u RGBA16F (shared NT, adapter vendor 0x%04x), shared fence",
+            kSlots, g_width, g_height, g_vendor);
     HANDLE th = CreateThread(nullptr, 0, worker_main, nullptr, 0, nullptr);
     if (!th) return false;
     CloseHandle(th);

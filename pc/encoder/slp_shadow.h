@@ -31,6 +31,7 @@ void slp_substitute_brake(const char *why);
 
 // Shared helpers implemented in slp_nvenc_hook.cpp.
 double slp_vrlink_avg_bps();
+void slp_vrlink_amf_target_bps(uint64_t target_bps);
 uint64_t slp_vrlink_dips_take();
 void slp_log(const char *fmt, ...);
 bool temp_flag_exists(const char *name);

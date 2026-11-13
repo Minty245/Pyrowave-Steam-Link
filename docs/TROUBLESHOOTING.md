@@ -11,7 +11,15 @@
 
 **Steam Link streams HEVC instead.** *Pyrowave streaming* must be on in Pyrowave Link, and the change applies when the
 stream restarts. `%LOCALAPPDATA%\SteamLinkPyrowave\logs\backend.log` shows whether the backend loaded
-(`[SHADOW] ready: SUBSTITUTION mode`). An NVIDIA GPU is required.
+(`[SHADOW] ready: SUBSTITUTION mode`). A supported NVIDIA or AMD GPU is required.
+
+**SteamVR crashes while initializing AMD AMF.** Close SteamVR and create `%TEMP%\slp_amf_off`, then restart SteamVR.
+This keeps the Pyrowave driver loaded but bypasses its AMF hook, allowing AMF to run normally. Remove the marker only
+when retesting a backend build. To isolate a crash after the HEVC component is created, use `%TEMP%\slp_amf_no_component`
+with a diagnostic backend build; this leaves AMF initialization hooked but skips the component vtable hooks.
+`%TEMP%\slp_amf_no_submit` or `%TEMP%\slp_amf_no_query` skips only that component method hook, for isolating which
+method causes a failure. `%TEMP%\slp_amf_query_passthrough` keeps the QueryOutput hook installed but forwards calls
+unchanged, isolating the wrapper from packet replacement.
 
 **Stutters or blocky frames under load.** Lower the Steam Link bandwidth target or improve the wireless link. The
 safety brake (Stream page) trims the bitrate above 1.0x for a moment after a lost frame.
