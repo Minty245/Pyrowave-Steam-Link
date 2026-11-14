@@ -283,6 +283,27 @@ static void fmt_tex(ID3D11Resource *res, char *out, size_t n)
     }
 }
 
+static bool d3d11_device_is_amd(ID3D11Device *device)
+{
+    if (!device) return false;
+    static const GUID iid_dxgidev = {0x54ec77fa, 0x1377, 0x44e6, {0x8c, 0x32, 0x88, 0xfd, 0x5f, 0x44, 0xc8, 0x4c}};
+    IDXGIDevice *dxgi_device = nullptr;
+    if (FAILED(device->lpVtbl->QueryInterface(device, iid_dxgidev, reinterpret_cast<void **>(&dxgi_device))) ||
+        !dxgi_device)
+        return false;
+
+    IDXGIAdapter *adapter = nullptr;
+    bool is_amd = false;
+    if (SUCCEEDED(dxgi_device->lpVtbl->GetAdapter(dxgi_device, &adapter)) && adapter) {
+        DXGI_ADAPTER_DESC desc = {};
+        if (SUCCEEDED(adapter->lpVtbl->GetDesc(adapter, &desc)))
+            is_amd = desc.VendorId == 0x1002;
+        adapter->lpVtbl->Release(adapter);
+    }
+    dxgi_device->lpVtbl->Release(dxgi_device);
+    return is_amd;
+}
+
 // --- device creation hook: the only D3D11 vtable patch we keep.
 // Context vtables are per-object heap copies that d3d11 rewrites (round 4c), so
 // patching them is both useless and racy; ID3D11Device's vtable lives in
@@ -296,17 +317,24 @@ static HRESULT STDMETHODCALLTYPE hook_CreateTexture2D(ID3D11Device *d, const D3D
     const D3D11_SUBRESOURCE_DATA *init, ID3D11Texture2D **out)
 {
     HRESULT hr = g_co.CreateTexture2D(d, desc, init, out);
-    // Identify vrlink's atlas by format and bind flags; its aspect ratio varies by configuration.
+    // Keep the 4:1 guard on non-AMD GPUs: size-only matching previously selected unrelated textures.
+    // The RX 7900 XT's observed 2x2 atlas is square, so AMD may use this tightly matched RGBA16F descriptor.
+    // Revalidate this exception with future SteamVR/VRLink updates; a new layout may also need PC and Frame changes.
+    const bool stacked_layout = desc && desc->Width >= 256 && desc->Height == 4 * desc->Width;
+    const bool rgb_atlas_desc = desc && desc->Format == 10 && desc->Width >= 256 && desc->Height >= 256 &&
+        desc->MiscFlags == 0 && desc->BindFlags == 0x28 && desc->MipLevels <= 1 &&
+        desc->Usage == D3D11_USAGE_DEFAULT;
+    const bool amd_nonstacked_atlas = rgb_atlas_desc && !stacked_layout && d3d11_device_is_amd(d);
+    // Non-4:1 atlases are accepted only on AMD; other GPUs retain the four-view safety check.
     // Our own shadow slots (shared NT, misc 0x800) are not the atlas.
-    if (SUCCEEDED(hr) && desc && out && *out && desc->Width >= 256 && desc->Height >= 256) {
+    if (SUCCEEDED(hr) && desc && out && *out && (stacked_layout || amd_nonstacked_atlas)) {
         ID3D11Texture2D *keep = nullptr;
         std::atomic<ID3D11Texture2D *> *slot = nullptr;
         // vrlink's atlas is exactly bind SRV|RTV (0x28), no misc flags, one mip. Our own textures (shadow slots
         // misc 0x802, prefilter mip chain misc 0x1, prefilter output bind 0x88) must never be taken for it (v27).
-        if (desc->Format == 10 && desc->MiscFlags == 0 && desc->BindFlags == 0x28 && desc->MipLevels <= 1 &&
-            desc->Usage == D3D11_USAGE_DEFAULT)
+        if (rgb_atlas_desc)
             slot = &g_atlas_tex;
-        else if (desc->Format == 104 && (desc->MiscFlags & 0x2)) slot = &g_sharedyuv_tex;
+        else if (stacked_layout && desc->Format == 104 && (desc->MiscFlags & 0x2)) slot = &g_sharedyuv_tex;
         if (slot) {
             // Newest wins (a stream restart can bring a new atlas); the old one is released.
             keep = *out;
@@ -319,6 +347,8 @@ static HRESULT STDMETHODCALLTYPE hook_CreateTexture2D(ID3D11Device *d, const D3D
                 old = slot->exchange(keep);
             }
             if (old) old->lpVtbl->Release(old);
+            if (amd_nonstacked_atlas)
+                slp_log("[SLP] accepting non-4:1 RGB-atlas on AMD; layout-specific foveation remains experimental");
             slp_log("[SLP] remembered %s texture %p (%ux%u)", desc->Format == 10 ? "RGB-atlas" : "shared-P010", (void *)keep,
                     desc->Width, desc->Height);
         }
