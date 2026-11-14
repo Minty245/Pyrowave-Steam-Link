@@ -552,7 +552,9 @@ struct Decoder::Impl
 		b.srcQueueFamilyIndex = src_family;
 		b.dstQueueFamilyIndex = dst_family;
 		b.image = img;
-		b.subresourceRange = {aspect, 0, 1, 0, 1};
+		// v7.25: every mip level and layer (the blur pyramid and the stability history are arrays with mips; the planes
+		// have one). Before, only mip 0 / layer 0 was covered.
+		b.subresourceRange = {aspect, 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS};
 		VkDependencyInfo di = {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
 		di.imageMemoryBarrierCount = 1;
 		di.pImageMemoryBarriers = &b;

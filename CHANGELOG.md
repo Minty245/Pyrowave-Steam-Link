@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased (1.1.0)
+
+- Frame (layer v7.25): image barriers cover every mip level and layer of the blur pyramid and the stability history
+  (before, only the first). Edge smoothing and motion-compensated stability were tried (v7.23/v7.24) and removed: no
+  visible gain in the headset, and the smoothing looked worse.
+- Installers: skip Steam libraries that no longer exist; the uninstaller finds SteamVR in other libraries; both Frame
+  install routes offer to reboot the Frame at the end; `tools/shutdown_probe.sh` for unclean-shutdown reports.
+
 ## 1.0.0 - first public release
 
 - PC: SteamVR driver + backend (v54): Pyrowave in place of NVENC HEVC for Steam Link, foveated prefilter with gaze,
