@@ -790,9 +790,8 @@ bool make_d3d_slots(ID3D11Device *dev, const D3D11_TEXTURE2D_DESC &ad)
         d.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
         d.CPUAccessFlags = 0;
         // VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D11_TEXTURE_BIT imports the NT handle
-        // returned by IDXGIResource1::CreateSharedHandle. Keep this paired with
-        // SHARED_NTHANDLE on AMD as well; the legacy GetSharedHandle/KMT pairing
-        // has different ownership semantics and is not interchangeable.
+        // returned by IDXGIResource1::CreateSharedHandle. Keep these existing
+        // flags paired; the legacy GetSharedHandle/KMT path has different ownership semantics.
         d.MiscFlags = kVulkanD3D11TextureMiscFlags;
         hr = dev->lpVtbl->CreateTexture2D(dev, &d, nullptr, &g_slots[i].tex);
         if (FAILED(hr) || !g_slots[i].tex) {

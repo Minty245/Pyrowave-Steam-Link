@@ -1,8 +1,9 @@
 # How Steam Link Pyrowave works
 
-Steam Link renders a foveated **atlas** on the PC, encodes it with NVENC on NVIDIA or AMF on AMD, sends it, and on the
-Frame decodes it with the hardware decoder and composes the views. Steam Link Pyrowave replaces only the codec and
-leaves the rest of that pipeline to Steam Link.
+Steam Link already renders a foveated **atlas** on the PC: four square views stacked vertically (a sharp
+gaze-following *inset* and a *wide* view per eye). It encodes the atlas with NVENC on NVIDIA or AMF on AMD, sends it,
+and on the Frame decodes it with the hardware decoder and composes the views. Steam Link Pyrowave replaces only the
+codec and leaves the rest of that pipeline to Steam Link.
 
 ## PC (`pc/`)
 
@@ -19,13 +20,15 @@ leaves the rest of that pipeline to Steam Link.
     pyramid of four vertically stacked square views, per-pixel blur from the angle to the gaze (acuity model, the edge
     ramp, colour-only blur that keeps each pixel's linear luminance), and contrast restoration. Gaze from
     `slp_gaze.cpp` (SteamVR driver input, calibrated against the picture).
-  - `slp_shadow.cpp`: shares the atlas with a Vulkan device (D3D11 NT shared texture + fence; the texture-handle flags
-    match Vulkan's D3D11 texture import contract on AMD as well) and encodes it with Pyrowave
+  - `slp_shadow.cpp`: shares the atlas with a Vulkan device (D3D11 NT shared texture + fence, using the existing
+    Vulkan D3D11 texture import flags) and encodes it with Pyrowave
     (4:2:0, or 4:4:4 with full colour) with the fork's region weights and per-tile CSF. For 4:2:0 the fork can do the
     RGB to YCbCr step like Steam Link's HEVC path: an 8-tap chroma downsample clamped to each view, and luma
     adjustment (luma solved so the decoded pixel keeps the source's luminance). Output: one **SLPW frame** per
     picture (32-byte header, packet size table, packets) plus two trailers the Frame reads: `SLPR` (edge ramp, inset
     positions, stability) and `SLPS` (headset filter settings).
+    AMD's observed 2x2 atlas layout is not supported by the foveation filters in this change; that layout needs
+    coordinated PC and Frame work and is deferred.
   - Safety brake: after vrlink reports a lost frame, the part of the bitrate above 1.0x vrlink's target is trimmed for
     a moment and recovers over `general.brake_recovery_ms`.
   - `slp_settings.cpp` / `slp_status.cpp`: `%LOCALAPPDATA%\SteamLinkPyrowave\settings.json` (read live) and

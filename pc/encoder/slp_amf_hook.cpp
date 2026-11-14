@@ -32,8 +32,9 @@ constexpr int32_t kAmfMemoryHost = 1;
 constexpr int32_t kAmfMemoryDx11 = 3;
 constexpr int32_t kAmfDataSurface = 1;
 constexpr int32_t kAmfVariantInt64 = 2;
-// Slot indices follow AMD's public AMF interface declarations; no AMF runtime
-// or SDK headers are linked into this DLL.
+// Slot indices follow the C++ AMF interfaces used by the MSVC runtime, not the
+// C AMFComponentVtbl layout (where SubmitInput is slot 24 instead of slot 22).
+// No AMF runtime or SDK headers are linked into this DLL.
 constexpr size_t kFactoryVtableSize = 7;
 constexpr size_t kComponentVtableSize = 28;
 
@@ -73,6 +74,7 @@ constexpr size_t GetNative = 25;
 
 namespace component_slot {
 constexpr size_t SetProperty = 3;
+constexpr size_t Terminate = 19;
 constexpr size_t SubmitInput = 22;
 constexpr size_t QueryOutput = 23;
 constexpr size_t GetContext = 24;
@@ -107,6 +109,7 @@ struct HookRecord {
 struct ComponentVtableRecord {
     std::vector<void *> original;
     bool set_property_patched = false;
+    bool terminate_patched = false;
     bool submit_input_patched = false;
     bool query_output_patched = false;
 };
@@ -116,6 +119,7 @@ std::unordered_map<void *, HookRecord> g_hooks;
 std::unordered_map<void **, ComponentVtableRecord> g_component_vtables;
 std::atomic<uint64_t> g_frame_index{0};
 std::atomic<uint64_t> g_query_output_calls{0};
+std::atomic<uint64_t> g_unmatched_output_pts{0};
 std::atomic<bool> g_warned_no_atlas{false};
 std::atomic<bool> g_warned_dx11_lock{false};
 std::atomic<FARPROC> g_amf_init_original{nullptr};
@@ -323,12 +327,28 @@ AmfResult __stdcall hook_component_submit_input(void *self, void *data)
         if (context) context->Release();
     }
 
+    // Keep AMF's encoder running so QueryOutput retains its timing and properties. This costs
+    // an extra HEVC encode, adding encoder-block power use and latency; bypass needs synthesized outputs.
     AmfResult result = original(self, data);
     if (result == kAmfOk && frame_index) {
         std::lock_guard<std::mutex> lock(g_hooks_mutex);
         auto it = g_hooks.find(self);
         if (it != g_hooks.end()) it->second.frames.push_back({frame_index, pts});
     }
+    return result;
+}
+
+AmfResult __stdcall hook_component_terminate(void *self)
+{
+    using Fn = AmfResult (__stdcall *)(void *);
+    Fn original = original_method<Fn>(self, component_slot::Terminate);
+    if (!original) return static_cast<AmfResult>(-1);
+
+    AmfResult result = original(self);
+    std::lock_guard<std::mutex> lock(g_hooks_mutex);
+    auto it = g_hooks.find(self);
+    if (it != g_hooks.end() && it->second.kind == InterfaceKind::Component)
+        g_hooks.erase(it);
     return result;
 }
 
@@ -432,6 +452,7 @@ AmfResult __stdcall hook_component_query_output(void *self, void **out_data)
 
     int64_t pts = data_pts(*out_data);
     uint64_t frame_index = 0;
+    bool unmatched_pts = false;
     {
         std::lock_guard<std::mutex> lock(g_hooks_mutex);
         auto record = g_hooks.find(self);
@@ -440,10 +461,19 @@ AmfResult __stdcall hook_component_query_output(void *self, void **out_data)
             auto match = std::find_if(frames.begin(), frames.end(), [pts](const HookRecord::PendingFrame &frame) {
                 return frame.pts == pts;
             });
-            if (match == frames.end()) match = frames.begin();
+            if (match == frames.end()) {
+                unmatched_pts = true;
+                match = frames.begin();
+            }
             frame_index = match->index;
             frames.erase(match);
         }
+    }
+    if (unmatched_pts) {
+        const uint64_t mismatch = g_unmatched_output_pts.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (mismatch == 1 || mismatch % 256 == 0)
+            slp_log("[AMF] QueryOutput PTS %lld did not match a pending frame; using oldest fallback (mismatch #%llu)",
+                    static_cast<long long>(pts), static_cast<unsigned long long>(mismatch));
     }
     if (call_index <= 8)
         slp_log("[AMF] QueryOutput #%llu pts=%lld frame=%llu",
@@ -508,6 +538,8 @@ AmfResult __stdcall hook_component_set_property(void *self, const wchar_t *name,
 
 bool patch_component(void *component)
 {
+    // Developer-only isolation flags: slp_amf_no_submit, slp_amf_no_query,
+    // slp_amf_no_component, and slp_amf_query_passthrough. Only slp_amf_off is user-facing.
     const bool hook_submit_input = !temp_flag_exists("slp_amf_no_submit");
     const bool hook_query_output = !temp_flag_exists("slp_amf_no_query");
     if (!hook_submit_input && !hook_query_output) {
@@ -537,11 +569,13 @@ bool patch_component(void *component)
 
     const bool hook_set_property = hook_submit_input || hook_query_output;
     const bool patch_set_property = hook_set_property && !vtable_record->second.set_property_patched;
+    const bool patch_terminate = !vtable_record->second.terminate_patched;
     const bool patch_submit = hook_submit_input && !vtable_record->second.submit_input_patched;
     const bool patch_query = hook_query_output && !vtable_record->second.query_output_patched;
-    if (patch_set_property || patch_submit || patch_query) {
+    if (patch_set_property || patch_terminate || patch_submit || patch_query) {
         const size_t first_slot = patch_set_property ? component_slot::SetProperty :
-            (patch_submit ? component_slot::SubmitInput : component_slot::QueryOutput);
+            (patch_terminate ? component_slot::Terminate :
+             (patch_submit ? component_slot::SubmitInput : component_slot::QueryOutput));
         const size_t last_slot = patch_query ? component_slot::QueryOutput :
             (patch_submit ? component_slot::SubmitInput : component_slot::SetProperty);
         DWORD old_protection = 0;
@@ -549,6 +583,7 @@ bool patch_component(void *component)
                             PAGE_READWRITE, &old_protection)) {
             if (vtable_record->second.original.size() == kComponentVtableSize &&
                 !vtable_record->second.set_property_patched &&
+                !vtable_record->second.terminate_patched &&
                 !vtable_record->second.submit_input_patched &&
                 !vtable_record->second.query_output_patched)
                 g_component_vtables.erase(vtable_record);
@@ -558,6 +593,10 @@ bool patch_component(void *component)
         if (patch_set_property) {
             vtable[component_slot::SetProperty] = reinterpret_cast<void *>(hook_component_set_property);
             vtable_record->second.set_property_patched = true;
+        }
+        if (patch_terminate) {
+            vtable[component_slot::Terminate] = reinterpret_cast<void *>(hook_component_terminate);
+            vtable_record->second.terminate_patched = true;
         }
         if (patch_submit) {
             vtable[component_slot::SubmitInput] = reinterpret_cast<void *>(hook_component_submit_input);

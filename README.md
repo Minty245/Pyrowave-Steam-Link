@@ -54,7 +54,8 @@ and the bitrate.
 
 ## Requirements
 
-- Windows 10 or 11 PC with an **NVIDIA** GPU (Steam Link uses NVENC there; Pyrowave takes over its encoder calls).
+- Windows 10 or 11 PC with an **NVIDIA** GPU (NVENC) or an **AMD** GPU (AMF, experimental; tested on a Radeon RX
+  7900 XT with SteamVR 2.19.2).
 - SteamVR with Steam Link, and a Steam Frame.
 
 ## Install
@@ -108,14 +109,17 @@ Frame `/tmp/slp_layer/`.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). In short:
 
-- **PC** (`pc/`): a small SteamVR driver loads the backend into SteamVR's server process. The backend answers Steam
-  Link's NVENC calls itself: it prefilters Steam Link's foveated atlas, encodes it with Pyrowave on a high-priority
-  Vulkan compute queue and hands the bytes back in place of HEVC. Steam Link sends them as usual.
+- **PC** (`pc/`): a small SteamVR driver loads the backend into SteamVR's server process. The backend hooks the
+  encoder API used by Steam Link (NVENC or experimental AMF), prefilters the supported foveated atlas, encodes it
+  with Pyrowave on a high-priority Vulkan compute queue and hands the bytes back in place of HEVC. Steam Link sends
+  them as usual.
 - **Frame** (`frame/`): a Vulkan layer in Steam Link's headset client stands in for the hardware video decoder when a
   Pyrowave stream arrives, decodes on the GPU into the same surfaces, and runs the headset filters. With full colour,
   the same layer in the compositor swaps those surfaces for 10-bit full-colour images.
 - **App** (`app/`): Pyrowave Link (RmlUi), writes `settings.json`, which the backend reads live and forwards headset
   settings inside the stream.
+
+AMD's current 2×2 atlas layout is not yet supported by the foveation filters; full AMD foveation support is deferred.
 
 ## Building
 
