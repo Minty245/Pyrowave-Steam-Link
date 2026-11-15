@@ -10,14 +10,16 @@
 //   mode 0: a plain 4:2:0 picture on top (bilinear chroma, centred siting).
 // The surface is read through an immutable YCbCr sampler (identity model, full range, midpoint siting, NEAREST
 // filters): sampling the centre of luma texel (x, y) returns luma (x, y) and chroma texel (x/2, y/2).
+// v7.31: the surface (Ws x Hs) can be larger than the packed picture (W x Hp): the decoder pads it (1280 -> 1344 wide,
+// 6832 -> 6848 tall). Coordinates are normalised by the surface; columns right of the picture repeat its last column.
 layout(local_size_x = 16, local_size_y = 16) in;
 layout(set = 0, binding = 0) uniform sampler2D uSrc;
 layout(set = 0, binding = 1, rgb10_a2) uniform writeonly image2D uOut;
-layout(push_constant) uniform PC { int W, H, Hp, E; int mode, pad0, pad1, pad2; } pc;
+layout(push_constant) uniform PC { int W, H, Hp, E; int mode, Ws, Hs, pad2; } pc;
 
 vec3 S(int x, int y)
 {
-    return textureLod(uSrc, (vec2(x, y) + 0.5) / vec2(pc.W, pc.Hp), 0.0).rgb;   // (Cr, Y, Cb)
+    return textureLod(uSrc, (vec2(x, y) + 0.5) / vec2(pc.Ws, pc.Hs), 0.0).rgb;   // (Cr, Y, Cb)
 }
 float Yl(int x, int y) { return S(x, y).g; }
 // chroma planes' sample (i, j) as (Cb plane, Cr plane)
@@ -38,12 +40,13 @@ vec2 C422(int i, int y)
 
 void main()
 {
-    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
-    if (p.x >= pc.W || p.y >= pc.Hp) return;
-    if (p.y >= pc.H) {
-        imageStore(uOut, p, vec4(512.0 / 1023.0, 0.0, 512.0 / 1023.0, 1.0));
+    ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+    if (q.x >= pc.Ws || q.y >= pc.Hs) return;
+    if (q.y >= pc.H) {
+        imageStore(uOut, q, vec4(512.0 / 1023.0, 0.0, 512.0 / 1023.0, 1.0));
         return;
     }
+    ivec2 p = ivec2(min(q.x, pc.W - 1), q.y);   // the picture's pixel (padding repeats the last column)
     float y = Yl(p.x, p.y);
     vec2 c;
     if (pc.mode == 2) {
@@ -62,5 +65,5 @@ void main()
         ivec2 a = clamp(i0, ivec2(0), m), b = clamp(i0 + 1, ivec2(0), m);
         c = mix(mix(Cp(a.x, a.y), Cp(b.x, a.y), f.x), mix(Cp(a.x, b.y), Cp(b.x, b.y), f.x), f.y);
     }
-    imageStore(uOut, p, vec4(c.y, y, c.x, 1.0));
+    imageStore(uOut, q, vec4(c.y, y, c.x, 1.0));
 }

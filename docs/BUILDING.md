@@ -31,4 +31,7 @@ can also be built one by one; see the comments at the top of `pc/encoder/CMakeLi
 through `slp::Unpacker` and checks it against a CPU reference:
 
     g++ -O2 -std=c++17 -DVK_NO_PROTOTYPES -I. -I$PYRO_SRC -I$VK_INC -I$VOLK unpack_test.cpp slp_unpack.cpp volk.o -ldl -o unpack_test
-    VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json ./unpack_test in.rgb W H
+    VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json ./unpack_test in.rgb W H [vkformat [pad_w pad_h]]
+
+`pad_w pad_h` put the picture in a larger surface like the Frame's decoder does (e.g. `1000156013 64 16` for a
+1280-wide 4:2:2 picture in a 1344 x 6848 Q10C surface); the padding is filled with garbage and must not show.

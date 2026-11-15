@@ -2,6 +2,13 @@
 
 ## Unreleased (1.1.0)
 
+- Frame (layer v7.31, decoder 7.31): HEVC full colour at any stream width. The Frame's decoder pads its surfaces (1280
+  wide decodes into 1344, 704 into 768, 6832 tall into 6848); v7.30 only rebuilt packed pictures that filled the surface
+  exactly and showed the others as plain 4:2:0 (scrambled colour away from 768 wide). The unpacker now reads the
+  picture inside the padded surface (padding repeats the last column) and the layer logs a packed picture that does not
+  fit. `unpack_test` takes optional padding (`pad_w pad_h`).
+- `collect_stall.sh` also collects the kernel's video / GPU messages and where each vrlink / vrcompositor thread is
+  waiting, and keeps a fixed-name copy of the newest archive (`stall-latest.tar.gz`).
 - Install-Frame.ps1: `-Package <file or folder>` installs a specific Frame package (a folder: its newest one).
 - Frame (layer v7.30): HEVC full colour keeps working across 4:2:2 / 4:4:4 switches. Steam Link reallocates its frame
   surfaces at every switch and the driver reuses their handles; the layer's tables kept the old entries, so a new 4:4:4

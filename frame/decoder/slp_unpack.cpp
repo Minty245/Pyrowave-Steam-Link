@@ -494,8 +494,10 @@ bool Unpacker::unpack(int index, const PackedLayout &l, double *ms, std::string 
 	std::lock_guard<std::mutex> lk(m.mu);
 	if (index < 0 || size_t(index) >= m.surfs.size() || !m.surfs[index].used) return ufail(err, "unpack: unknown surface");
 	Surf &t = m.surfs[index];
-	if (l.width != int(t.w) || l.packed_height != int(t.h) || l.height <= 0 || l.height > l.packed_height || l.width < 2)
-		return ufail(err, "unpack: layout does not match the surface");
+	// v7.31: the decoder pads its surfaces (width to its tile alignment, e.g. 1280 -> 1344, 704 -> 768; height to 32), so
+	// the picture only has to fit inside the surface
+	if (l.width > int(t.w) || l.packed_height > int(t.h) || l.height <= 0 || l.height > l.packed_height || l.width < 2)
+		return ufail(err, "unpack: layout does not fit the surface");
 	auto t0 = std::chrono::steady_clock::now();
 	const Pipe &p = m.pipes[t.pipe];
 	m.begin();
@@ -511,7 +513,7 @@ bool Unpacker::unpack(int index, const PackedLayout &l, double *ms, std::string 
 	              t.rexport ? own : VK_QUEUE_FAMILY_IGNORED);
 	vkCmdBindPipeline(m.cmd, VK_PIPELINE_BIND_POINT_COMPUTE, p.pipe);
 	vkCmdBindDescriptorSets(m.cmd, VK_PIPELINE_BIND_POINT_COMPUTE, p.pl, 0, 1, &t.set, 0, nullptr);
-	int32_t pc[8] = {l.width, l.height, l.packed_height, l.strip, l.mode, 0, 0, 0};
+	int32_t pc[8] = {l.width, l.height, l.packed_height, l.strip, l.mode, int32_t(t.w), int32_t(t.h), 0};
 	vkCmdPushConstants(m.cmd, p.pl, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), pc);
 	vkCmdDispatch(m.cmd, (t.w + 15) / 16, (t.h + 15) / 16, 1);
 	// release both back

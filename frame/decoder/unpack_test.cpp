@@ -124,9 +124,12 @@ static double psnr(double mse) { return mse > 0 ? 10 * log10(1.0 / mse) : 99.0; 
 
 int main(int argc, char **argv)
 {
-	if (argc < 4) { printf("usage: unpack_test in.rgb W H [vkformat]\n"); return 1; }
+	if (argc < 4) { printf("usage: unpack_test in.rgb W H [vkformat [pad_w pad_h]]\n"); return 1; }
 	W = atoi(argv[2]); H = atoi(argv[3]);
 	uint32_t fmt = argc > 4 ? uint32_t(atoi(argv[4])) : uint32_t(VK_FORMAT_G16_B16R16_2PLANE_420_UNORM);
+	// v7.31: the decoder pads its surfaces (e.g. 1280 -> 1344 wide, 6832 -> 6848 tall); the padding is filled with
+	// garbage here, so a rebuild that reads it, or a shader that normalises by the picture size, fails
+	const int padw = argc > 6 ? atoi(argv[5]) : 0, padh = argc > 6 ? atoi(argv[6]) : 0;
 	FILE *f = fopen(argv[1], "rb");
 	std::vector<uint8_t> in(size_t(W) * H * 3);
 	if (!f || fread(in.data(), 1, in.size(), f) != in.size()) { printf("cannot read %s\n", argv[1]); return 1; }
@@ -142,23 +145,24 @@ int main(int argc, char **argv)
 	for (int mode : {0, 1, 2}) {
 		int Hp = mode == 2 ? 2 * H : mode == 1 ? (((H + H / 3) + 15) & ~15) : (((H + H / 3) + 15) & ~15);
 		int E = Hp - H;
-		std::vector<uint16_t> yp(size_t(W) * Hp), uv(size_t(W / 2) * (Hp / 2) * 2);
+		const int Ws = W + padw, Hs = Hp + padh;
+		std::vector<uint16_t> yp(size_t(Ws) * Hs, uint16_t(1023 << 6)), uv(size_t(Ws / 2) * (Hs / 2) * 2, uint16_t(77 << 6));
 		// (mode 0 luma: plain Y')
 		for (int y = 0; y < Hp; y++)
 			for (int x = 0; x < W; x++) {
 				float v;
 				if (mode == 0) { float c[3]; rgb(x, y, c); v = y < H ? c[0] * K[0] + c[1] * K[1] + c[2] * K[2] : 0; }
 				else v = ps_y(x, y, mode, Hp, E);
-				yp[size_t(y) * W + x] = q10(v);
+				yp[size_t(y) * Ws + x] = q10(v);
 			}
 		for (int j = 0; j < Hp / 2; j++)
 			for (int i = 0; i < W / 2; i++) {
 				float o[2];
 				ps_uv(i, j, mode, E, o);
-				uv[(size_t(j) * (W / 2) + i) * 2] = q10(o[0]);
-				uv[(size_t(j) * (W / 2) + i) * 2 + 1] = q10(o[1]);
+				uv[(size_t(j) * (Ws / 2) + i) * 2] = q10(o[0]);
+				uv[(size_t(j) * (Ws / 2) + i) * 2 + 1] = q10(o[1]);
 			}
-		int t = u.create_test_surface(uint32_t(W), uint32_t(Hp), fmt, yp, uv, &err);
+		int t = u.create_test_surface(uint32_t(Ws), uint32_t(Hs), fmt, yp, uv, &err);
 		if (t < 0) { printf("surface: %s\n", err.c_str()); return 1; }
 		PackedLayout l;
 		l.mode = mode; l.width = W; l.height = H; l.packed_height = Hp; l.strip = E;
@@ -166,8 +170,8 @@ int main(int argc, char **argv)
 		std::vector<uint32_t> px;
 		if (!u.unpack(t, l, &ms, &err) || !u.readback_rgba(t, px, &err)) { printf("unpack: %s\n", err.c_str()); return 1; }
 		// CPU reference of the unpack from the quantised planes
-		auto Yq = [&](int x, int y) { return (yp[size_t(y) * W + x] >> 6) / 1023.0f; };
-		auto Cq = [&](int i, int j, int c) { return (uv[(size_t(j) * (W / 2) + i) * 2 + c] >> 6) / 1023.0f; };
+		auto Yq = [&](int x, int y) { return (yp[size_t(y) * Ws + x] >> 6) / 1023.0f; };
+		auto Cq = [&](int i, int j, int c) { return (uv[(size_t(j) * (Ws / 2) + i) * 2 + c] >> 6) / 1023.0f; };
 		auto C422 = [&](int i, int y, float o[2]) {
 			i = std::max(0, std::min(W / 2 - 1, i));
 			if (!(y & 1)) { o[0] = Cq(i, y >> 1, 0); o[1] = Cq(i, y >> 1, 1); return; }
@@ -177,11 +181,13 @@ int main(int argc, char **argv)
 		};
 		double maxd = 0, mse_rgb = 0, mse_c = 0;
 		int bad_below = 0;
-		for (int y = 0; y < Hp; y++)
-			for (int x = 0; x < W; x++) {
-				uint32_t v = px[size_t(y) * W + x];
+		int bad_pad = 0;
+		for (int y = 0; y < Hs; y++)
+			for (int x = 0; x < Ws; x++) {
+				uint32_t v = px[size_t(y) * Ws + x];
 				float cr = d10(v), yy = d10(v >> 10), cb = d10(v >> 20);
 				if (y >= H) { bad_below += (yy != 0.0f || fabsf(cb - 512 / 1023.0f) > 1e-3f); continue; }
+				if (x >= W) { bad_pad += v != px[size_t(y) * Ws + W - 1]; continue; }   // repeats the last column
 				float ey = Yq(x, y), ecb, ecr;
 				if (mode == 2) { ecb = Yq(x, H + y); ecr = x < W / 2 ? Cq(x, y, 0) : Cq(x - W / 2, y, 1); }
 				else if (mode == 1) {
@@ -210,11 +216,12 @@ int main(int argc, char **argv)
 				mse_c += (cb - so[0]) * (cb - so[0]) + (cr - so[1]) * (cr - so[1]);
 			}
 		double n = double(W) * H;
-		bool ok = maxd <= 1.5 / 1023.0 && bad_below == 0;
+		bool ok = maxd <= 1.5 / 1023.0 && bad_below == 0 && bad_pad == 0;
 		fails += !ok;
-		printf("%s (%dx%d in %dx%d): GPU vs CPU unpack max diff %.2f LSB, area below %s -> %s | RGB PSNR %.2f dB, chroma PSNR %.2f dB  "
-		       "[%.2f ms]\n",
-		       mode == 2 ? "4:4:4" : mode == 1 ? "4:2:2" : "4:2:0", W, H, W, Hp, maxd * 1023.0, bad_below ? "NOT black" : "black",
+		printf("%s (%dx%d in %dx%d, surface %dx%d): GPU vs CPU unpack max diff %.2f LSB, area below %s, padding %s -> %s | "
+		       "RGB PSNR %.2f dB, chroma PSNR %.2f dB  [%.2f ms]\n",
+		       mode == 2 ? "4:4:4" : mode == 1 ? "4:2:2" : "4:2:0", W, H, W, Hp, Ws, Hs, maxd * 1023.0,
+		       bad_below ? "NOT black" : "black", bad_pad ? "WRONG" : "edge",
 		       ok ? "MATCH" : "MISMATCH", psnr(mse_rgb / (3 * n)), psnr(mse_c / (2 * n)), ms);
 		u.release(t);
 	}

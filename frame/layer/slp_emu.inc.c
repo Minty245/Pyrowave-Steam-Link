@@ -891,11 +891,21 @@ static void pk_ioctl(int fd, unsigned long req, void *arg, int pre, int ret)
     g_pk.frames++;
     if (target < 0 || !out) return;   // not ours, or vrcompositor shows the NV12 surface
     slpd_pk_layout_l lay;
-    if (g_pk.cur.mode >= 0 && (uint32_t)g_pk.cur.w == sw && (uint32_t)g_pk.cur.hp == sh) {
+    // v7.31: the decoder pads its surfaces (width to its tile alignment: 1280 -> 1344, 704 -> 768; height: 6832 -> 6848),
+    // so the packed picture only has to fit with at most that much padding. v7.30 required an exact match and rebuilt
+    // padded packed pictures as plain 4:2:0 (scrambled colour at e.g. 832 or 1280 wide).
+    if (g_pk.cur.mode >= 0 && (uint32_t)g_pk.cur.w <= sw && (uint32_t)g_pk.cur.hp <= sh && sw - (uint32_t)g_pk.cur.w < 256 &&
+        sh - (uint32_t)g_pk.cur.hp < 128) {
         lay.mode = g_pk.cur.mode; lay.width = g_pk.cur.w; lay.height = g_pk.cur.h; lay.packed_height = g_pk.cur.hp;
         lay.strip = g_pk.cur.e;
     } else {
         lay.mode = 0; lay.width = (int)sw; lay.height = (int)sh; lay.packed_height = (int)sh; lay.strip = 0;   // plain picture
+        static uint32_t said_w, said_h;
+        if (g_pk.cur.mode >= 0 && (said_w != sw || said_h != sh)) {
+            said_w = sw; said_h = sh;
+            slog("HEVC FULL COLOUR: packed %dx%d picture does not fit surface %ux%u: shown as plain 4:2:0", g_pk.cur.w,
+                 g_pk.cur.hp, sw, sh);
+        }
     }
     char err[256] = {0};
     double ms = 0;
