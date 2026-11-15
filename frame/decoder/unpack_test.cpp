@@ -86,7 +86,7 @@ static float ps_y(int x, int yp, int mode, int Hp, int E)
 		if (x < hw) { C(x, 2 * r + 1, o); return o[0]; }
 		C(x - hw, 2 * r + 1, o); return o[1];
 	}
-	if (mode == 2) { if (r >= H) return 0; rgb(x, r, c); cbcr(c, o); return o[0]; }
+	if (mode >= 2) { if (r >= H) return 0; rgb(x, r, c); cbcr(c, o); return o[0]; }
 	return 0;
 }
 static void ps_uv(int i, int j, int mode, int E, float out[2])
@@ -97,6 +97,16 @@ static void ps_uv(int i, int j, int mode, int E, float out[2])
 		if (j < hh) { C(i, 2 * j, out); return; }
 		int r = E + (j - hh);
 		if (r < hh) C(i, 2 * r + 1, out);
+		return;
+	}
+	if (mode == 3) {   // tiled 4:4:4 (Full Colour 0.2+): copy of slfc.cpp's ps_uv
+		if (j >= H) return;
+		bool top = j < hh;
+		int jj = top ? j : j - hh;
+		int x = (i & ~31) * 2 + (i & 31), y = (jj & ~31) * 2 + (jj & 31) + (top ? 0 : 32);
+		float c[3], o[2];
+		rgb(x, y, c); cbcr(c, o); out[0] = o[1];
+		rgb(x + 32, y, c); cbcr(c, o); out[1] = o[1];
 		return;
 	}
 	if (mode == 2) {
@@ -142,8 +152,8 @@ int main(int argc, char **argv)
 	if (!u.init(&err)) { printf("init: %s\n", err.c_str()); return 1; }
 	printf("GPU %s, %dx%d, surface format %u\n", u.device_name().c_str(), W, H, fmt);
 	int fails = 0;
-	for (int mode : {0, 1, 2}) {
-		int Hp = mode == 2 ? 2 * H : mode == 1 ? (((H + H / 3) + 15) & ~15) : (((H + H / 3) + 15) & ~15);
+	for (int mode : {0, 1, 2, 3}) {
+		int Hp = mode >= 2 ? 2 * H : mode == 1 ? (((H + H / 3) + 15) & ~15) : (((H + H / 3) + 15) & ~15);
 		int E = Hp - H;
 		const int Ws = W + padw, Hs = Hp + padh;
 		std::vector<uint16_t> yp(size_t(Ws) * Hs, uint16_t(1023 << 6)), uv(size_t(Ws / 2) * (Hs / 2) * 2, uint16_t(77 << 6));
@@ -189,7 +199,11 @@ int main(int argc, char **argv)
 				if (y >= H) { bad_below += (yy != 0.0f || fabsf(cb - 512 / 1023.0f) > 1e-3f); continue; }
 				if (x >= W) { bad_pad += v != px[size_t(y) * Ws + W - 1]; continue; }   // repeats the last column
 				float ey = Yq(x, y), ecb, ecr;
-				if (mode == 2) { ecb = Yq(x, H + y); ecr = x < W / 2 ? Cq(x, y, 0) : Cq(x - W / 2, y, 1); }
+				if (mode == 3) {
+					ecb = Yq(x, H + y);
+					ecr = Cq((x & ~63) / 2 + (x & 31), (y & ~63) / 2 + (y & 31) + ((y & 32) ? H / 2 : 0), (x & 32) ? 1 : 0);
+				}
+				else if (mode == 2) { ecb = Yq(x, H + y); ecr = x < W / 2 ? Cq(x, y, 0) : Cq(x - W / 2, y, 1); }
 				else if (mode == 1) {
 					float t2 = (x - 0.5f) * 0.5f, fi = floorf(t2), fr = t2 - fi, a[2], b[2];
 					C422(int(fi), y, a); C422(int(fi) + 1, y, b);
@@ -220,7 +234,7 @@ int main(int argc, char **argv)
 		fails += !ok;
 		printf("%s (%dx%d in %dx%d, surface %dx%d): GPU vs CPU unpack max diff %.2f LSB, area below %s, padding %s -> %s | "
 		       "RGB PSNR %.2f dB, chroma PSNR %.2f dB  [%.2f ms]\n",
-		       mode == 2 ? "4:4:4" : mode == 1 ? "4:2:2" : "4:2:0", W, H, W, Hp, Ws, Hs, maxd * 1023.0,
+		       mode == 3 ? "4:4:4 tiled" : mode == 2 ? "4:4:4 split" : mode == 1 ? "4:2:2" : "4:2:0", W, H, W, Hp, Ws, Hs, maxd * 1023.0,
 		       bad_below ? "NOT black" : "black", bad_pad ? "WRONG" : "edge",
 		       ok ? "MATCH" : "MISMATCH", psnr(mse_rgb / (3 * n)), psnr(mse_c / (2 * n)), ms);
 		u.release(t);

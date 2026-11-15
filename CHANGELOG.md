@@ -2,6 +2,9 @@
 
 ## Unreleased (1.1.0)
 
+- Frame (layer v7.32, decoder 7.32): HEVC full colour layout 3, the tiled 4:4:4 of Steam Link Full Colour 0.2.0 (Cr in
+  64x64 blocks whose quarters sit in the chroma samples over the block, so reds are coded at their own area's foveation
+  QP; less red noise in the sharp centre). Layout 2 (Full Colour 0.1.x) still works. `unpack_test` covers both.
 - Frame (layer v7.31, decoder 7.31): HEVC full colour at any stream width. The Frame's decoder pads its surfaces (1280
   wide decodes into 1344, 704 into 768, 6832 tall into 6848); v7.30 only rebuilt packed pictures that filled the surface
   exactly and showed the others as plain 4:2:0 (scrambled colour away from 768 wide). The unpacker now reads the

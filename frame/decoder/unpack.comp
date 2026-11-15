@@ -6,7 +6,12 @@
 //     O = [Cb odd | Cr odd] (W x H/2): O rows 0..E-1 in the luma strip (rows H..), the rest in the chroma planes from
 //     chroma row H/2. Chroma sample i sits between pixels 2i and 2i+1; a pixel's chroma is linear between the two
 //     nearest samples (the PC's luma adjustment assumes exactly this).
-//   mode 2, 4:4:4 (Hp = 2H): luma top = Y, luma bottom = Cb, Cb plane = Cr's left half, Cr plane = Cr's right half.
+//   mode 2, 4:4:4 (Hp = 2H, Full Colour 0.1.x): luma top = Y, luma bottom = Cb, Cb plane = Cr's left half, Cr plane =
+//     Cr's right half.
+//   mode 3, tiled 4:4:4 (Hp = 2H, Full Colour 0.2+; W, H multiples of 64): luma as mode 2. Cr in 64x64 blocks, each
+//     block's 32x32 quarters in the chroma samples over that block: Cr pixel (x, y) is chroma sample
+//     ((x & ~63) / 2 + (x & 31), (y & ~63) / 2 + (y & 31) + (y & 32 ? H / 2 : 0)) of the Cb plane (x & 32 == 0) or the Cr
+//     plane, so it is coded at its own area's QP (Steam Link's foveation).
 //   mode 0: a plain 4:2:0 picture on top (bilinear chroma, centred siting).
 // The surface is read through an immutable YCbCr sampler (identity model, full range, midpoint siting, NEAREST
 // filters): sampling the centre of luma texel (x, y) returns luma (x, y) and chroma texel (x/2, y/2).
@@ -49,7 +54,10 @@ void main()
     ivec2 p = ivec2(min(q.x, pc.W - 1), q.y);   // the picture's pixel (padding repeats the last column)
     float y = Yl(p.x, p.y);
     vec2 c;
-    if (pc.mode == 2) {
+    if (pc.mode == 3) {
+        vec2 v = Cp((p.x & ~63) / 2 + (p.x & 31), (p.y & ~63) / 2 + (p.y & 31) + ((p.y & 32) != 0 ? pc.H / 2 : 0));
+        c = vec2(Yl(p.x, pc.H + p.y), (p.x & 32) == 0 ? v.x : v.y);
+    } else if (pc.mode == 2) {
         float cr = p.x < pc.W / 2 ? Cp(p.x, p.y).x : Cp(p.x - pc.W / 2, p.y).y;
         c = vec2(Yl(p.x, pc.H + p.y), cr);
     } else if (pc.mode == 1) {

@@ -892,7 +892,7 @@ static void install_hooks(void)
     open_log();
     char exe[256] = {0};
     if (readlink("/proc/self/exe", exe, sizeof(exe) - 1) < 0) exe[0] = 0;
-    slog("slp layer v7.31 loaded into pid %d (%s), mode %d; decoder stand-in %s", (int)getpid(), exe, g_active,
+    slog("slp layer v7.32 loaded into pid %d (%s), mode %d; decoder stand-in %s", (int)getpid(), exe, g_active,
          emu_armed() ? "ARMED (auto-detect: Pyrowave streams decoded by Pyrowave, HEVC streams by the hardware)" : "not armed (observe-only)");
     if (g_active != 1) {
         slog("compositor mode: %s%s, no GOT patching", g_cfc ? "FULL COLOUR (shared-image swap of the stream views)" : "",

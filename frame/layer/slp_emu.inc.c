@@ -709,7 +709,7 @@ static int pk_parse_marker(const uint8_t *p, size_t n, pk_layout_l *out)
         uint16_t v[5];
         memcpy(v, d + 2, 10);
         pk_layout_l l = {d[0], v[0], v[1], v[2], v[3]};
-        if (l.mode > 2 || l.w < 64 || l.h < 64 || l.hp < l.h || l.hp > 8192 || l.e != l.hp - l.h || (l.w & 1) || (l.h & 1))
+        if (l.mode > 3 || l.w < 64 || l.h < 64 || l.hp < l.h || l.hp > 8192 || l.e != l.hp - l.h || (l.w & 1) || (l.h & 1))
             return 0;
         *out = l;
         return 1;
@@ -850,7 +850,8 @@ static void pk_ioctl(int fd, unsigned long req, void *arg, int pre, int ret)
                     int had = g_pk.cur.mode >= 0;
                     if (pk_parse_marker(g_pk.maps[k].addr + b->m.planes[0].data_offset, n, &l)) {
                         if (!had || memcmp(&l, &g_pk.cur, sizeof(l)) != 0)
-                            slog("HEVC FULL COLOUR: stream is packed %s: %dx%d in a %dx%d picture", l.mode == 2 ? "4:4:4"
+                            slog("HEVC FULL COLOUR: stream is packed %s: %dx%d in a %dx%d picture", l.mode == 3 ? "4:4:4"
+                                 : l.mode == 2 ? "4:4:4 (split halves, Full Colour 0.1.x)"
                                  : l.mode == 1 ? "4:2:2" : "4:2:0 (PC fallback)", l.w, l.h, l.w, l.hp);
                         g_pk.cur = l;
                     } else {
@@ -921,7 +922,7 @@ static void pk_ioctl(int fd, unsigned long req, void *arg, int pre, int ret)
         if (g_pk.last_log > 0 && g_pk.unpacked)
             slog("HEVC FULL COLOUR: %llu frames, %llu rebuilt (%s), unpack avg %.2f ms max %.2f ms, %llu errors",
                  (unsigned long long)g_pk.frames, (unsigned long long)g_pk.unpacked,
-                 lay.mode == 2 ? "4:4:4" : lay.mode == 1 ? "4:2:2" : "4:2:0", g_pk.ms_sum / (double)g_pk.unpacked, g_pk.ms_max,
+                 lay.mode >= 2 ? "4:4:4" : lay.mode == 1 ? "4:2:2" : "4:2:0", g_pk.ms_sum / (double)g_pk.unpacked, g_pk.ms_max,
                  (unsigned long long)g_pk.errors);
         g_pk.last_log = now;
         g_pk.ms_max = 0;

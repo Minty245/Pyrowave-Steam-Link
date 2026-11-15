@@ -234,7 +234,7 @@ SLPD_API int slpd_frame_chroma(const void *frame, size_t size)
 // v7.22: version of this library (the layer logs it)
 SLPD_API const char *slpd_version(void)
 {
-	return "7.31";
+	return "7.32";
 }
 
 // v7.21 power options and per-pass GPU times
