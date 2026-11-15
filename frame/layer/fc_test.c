@@ -1,6 +1,7 @@
 // Host test of the v7.19 full-colour handover (socket protocol, peer check, inode pairing, target states).
 // Builds the real layer source with stubbed decoder calls: memfds stand in for the dma-bufs.
 // gcc -O1 -g -I$VK_INC fc_test.c -o slp_fc_test -ldl -lpthread && SLP_FC_TEST=1 ./slp_fc_test
+// v7.29: SLP_FC_10BIT=1 runs the compositor part with 10-bit surfaces (HEVC Main10, as for HEVC full colour).
 #include "slp_layer.c"
 #include <sys/mman.h>
 #include <assert.h>
@@ -208,7 +209,10 @@ int main(void)
     g_dev[0].next_gdpa = f_gdpa;
     t_out[7] = 0;
     VkImage surf = (VkImage)(uintptr_t)0x4444, other = (VkImage)(uintptr_t)0x4445;
-    track_image(surf, VK_FORMAT_G8_B8R8_2PLANE_420_UNORM, 768, 3072);
+    const VkFormat T_FMT = getenv("SLP_FC_10BIT") ? VK_FORMAT_G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16
+                                                  : VK_FORMAT_G8_B8R8_2PLANE_420_UNORM;
+    printf("  (surfaces: %s)\n", T_FMT == VK_FORMAT_G8_B8R8_2PLANE_420_UNORM ? "8-bit NV12" : "10-bit");
+    track_image(surf, T_FMT, 768, 3072);
     // the AllocateMemory hook path: dedicated dma-buf import of the tracked surface
     {
         PFN_vkAllocateMemory am = (PFN_vkAllocateMemory)slp_GetDeviceProcAddr(dev, "vkAllocateMemory");
@@ -233,7 +237,7 @@ int main(void)
     vi.pNext = &conv;
     vi.image = surf;
     vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    vi.format = VK_FORMAT_G8_B8R8_2PLANE_420_UNORM;
+    vi.format = T_FMT;
     vi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     vi.subresourceRange.levelCount = 1;
     vi.subresourceRange.layerCount = 1;
@@ -288,7 +292,7 @@ int main(void)
     pb((VkCommandBuffer)0, 0, 0, 0, 0, NULL, 0, NULL, 2, b);
     CHECK(s_nb1 == 2, "after destroy: barriers pass through");
     // failure path: vrlink does not know the surface -> original view
-    track_image(surf, VK_FORMAT_G8_B8R8_2PLANE_420_UNORM, 768, 3072);
+    track_image(surf, T_FMT, 768, 3072);
     cfc_note_import(dev, surf, fd_inode(surfX));
     int before = s_views;
     cv(dev, &vi, NULL, &view);

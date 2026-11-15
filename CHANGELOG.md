@@ -2,6 +2,9 @@
 
 ## Unreleased (1.1.0)
 
+- Frame (layer v7.29): vrcompositor swaps in the rebuilt picture for 10-bit stream surfaces too (HEVC Main10, as Steam
+  Link sends it); before, only 8-bit (Pyrowave) views were swapped, so HEVC full colour was unpacked but never shown.
+  `fc_test.c` runs with 10-bit surfaces when `SLP_FC_10BIT=1`.
 - Frame (layer v7.28): HEVC full colour now works when vrlink opened the decoder before the layer loaded (the usual
   case). The layer keeps its own read-only view of the stream buffers for such sessions (released when vrlink
   reallocates them), so the marker is seen and pictures are rebuilt. In v7.26 these sessions were never watched and

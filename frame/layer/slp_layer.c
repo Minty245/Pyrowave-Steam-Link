@@ -892,7 +892,7 @@ static void install_hooks(void)
     open_log();
     char exe[256] = {0};
     if (readlink("/proc/self/exe", exe, sizeof(exe) - 1) < 0) exe[0] = 0;
-    slog("slp layer v7.28 loaded into pid %d (%s), mode %d; decoder stand-in %s", (int)getpid(), exe, g_active,
+    slog("slp layer v7.29 loaded into pid %d (%s), mode %d; decoder stand-in %s", (int)getpid(), exe, g_active,
          emu_armed() ? "ARMED (auto-detect: Pyrowave streams decoded by Pyrowave, HEVC streams by the hardware)" : "not armed (observe-only)");
     if (g_active != 1) {
         slog("compositor mode: %s%s, no GOT patching", g_cfc ? "FULL COLOUR (shared-image swap of the stream views)" : "",
@@ -1556,9 +1556,10 @@ static int cfc_import(VkDevice d, VkImage surf, uint64_t ino, uint32_t sw, uint3
 // vkCreateImageView of a stream surface: returns 1 and a view of our image when swapped (then *res is its result).
 static int cfc_view(VkDevice d, const VkImageViewCreateInfo *ci, const VkAllocationCallbacks *a, VkImageView *out, VkResult *res)
 {
-    if (!ci || !out || ci->viewType != VK_IMAGE_VIEW_TYPE_2D || ci->format != VK_FORMAT_G8_B8R8_2PLANE_420_UNORM ||
+    if (!ci || !out || ci->viewType != VK_IMAGE_VIEW_TYPE_2D ||
+        (ci->format != VK_FORMAT_G8_B8R8_2PLANE_420_UNORM && ci->format != VK_FORMAT_G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16) ||
         ci->subresourceRange.aspectMask != VK_IMAGE_ASPECT_COLOR_BIT)
-        return 0;   // only the full (YCbCr-converted) view of an NV12 surface is replaced
+        return 0;   // only the full (YCbCr-converted) view of a stream surface is replaced (v7.29: 10-bit HEVC too)
     // 1. first view of this surface: fetch + import the shared image (outside the table lock)
     pthread_mutex_lock(&g_cfc_mu);
     cfc_entry *e = cfc_find_locked(ci->image);
