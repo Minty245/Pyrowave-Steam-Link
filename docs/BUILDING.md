@@ -25,3 +25,10 @@ can also be built one by one; see the comments at the top of `pc/encoder/CMakeLi
 - Pyrowave fork: `slp-ycbcr420-test` (4:2:0 conversion modes against the upstream scaler; `0` as the first argument
   runs the conversion alone, for devices the encoder does not run on).
 - `app`: on Linux the app builds as `slp_preview`, an offscreen harness that renders the UI to an image and can click.
+
+### HEVC full colour unpack test (host, lavapipe)
+`frame/decoder/unpack_test.cpp` packs an RGB picture like Steam Link Full Colour's PC shaders, runs `unpack.comp`
+through `slp::Unpacker` and checks it against a CPU reference:
+
+    g++ -O2 -std=c++17 -DVK_NO_PROTOTYPES -I. -I$PYRO_SRC -I$VK_INC -I$VOLK unpack_test.cpp slp_unpack.cpp volk.o -ldl -o unpack_test
+    VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json ./unpack_test in.rgb W H

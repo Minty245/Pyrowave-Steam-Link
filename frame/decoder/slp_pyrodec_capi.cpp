@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 #include "slp_pyrodec_capi.h"
 #include "slp_pyro_dec.hpp"
+#include "slp_unpack.hpp"
 
 #include <cstdio>
 #include <cstring>
@@ -233,7 +234,7 @@ SLPD_API int slpd_frame_chroma(const void *frame, size_t size)
 // v7.22: version of this library (the layer logs it)
 SLPD_API const char *slpd_version(void)
 {
-	return "7.25";
+	return "7.26";
 }
 
 // v7.21 power options and per-pass GPU times
@@ -281,4 +282,93 @@ SLPD_API int slpd_frame_info(const void *frame, size_t size, uint32_t *width, ui
 	if (seq) *seq = h.seq;
 	return 0;
 }
+}
+
+// ---- v7.26 HEVC full colour ----
+SLPD_API slpd_pk *slpd_pk_create(char *err, size_t errlen)
+{
+	auto *u = new Unpacker();
+	std::string es;
+	if (!u->init(&es))
+	{
+		copy_err(es, err, errlen);
+		delete u;
+		return nullptr;
+	}
+	copy_err(u->device_name(), err, errlen);
+	return reinterpret_cast<slpd_pk *>(u);
+}
+
+SLPD_API void slpd_pk_destroy(slpd_pk *pk)
+{
+	delete reinterpret_cast<Unpacker *>(pk);
+}
+
+SLPD_API int slpd_pk_import(slpd_pk *pk, int dmabuf_fd, uint32_t width, uint32_t height, uint32_t vk_format,
+                            uint64_t modifier, const uint64_t offset[2], const uint64_t pitch[2], uint64_t size, char *err,
+                            size_t errlen)
+{
+	SurfaceDesc d;
+	d.dmabuf_fd = dmabuf_fd;
+	d.width = width;
+	d.height = height;
+	d.vk_format = vk_format;
+	d.modifier = modifier;
+	for (int i = 0; i < 2; i++)
+	{
+		d.plane_offset[i] = offset[i];
+		d.plane_pitch[i] = pitch[i];
+	}
+	d.size = size;
+	std::string es;
+	int t = reinterpret_cast<Unpacker *>(pk)->import_surface(d, &es);
+	if (t < 0)
+		copy_err(es, err, errlen);
+	return t;
+}
+
+SLPD_API void slpd_pk_release(slpd_pk *pk, int target)
+{
+	reinterpret_cast<Unpacker *>(pk)->release(target);
+}
+
+SLPD_API int slpd_pk_unpack(slpd_pk *pk, int target, const slpd_pk_layout *layout, double *ms, char *err, size_t errlen)
+{
+	if (!layout)
+		return -1;
+	PackedLayout l;
+	l.mode = layout->mode;
+	l.width = layout->width;
+	l.height = layout->height;
+	l.packed_height = layout->packed_height;
+	l.strip = layout->strip;
+	std::string es;
+	if (!reinterpret_cast<Unpacker *>(pk)->unpack(target, l, ms, &es))
+	{
+		copy_err(es, err, errlen);
+		return -1;
+	}
+	return 0;
+}
+
+SLPD_API int slpd_pk_rgba_export(slpd_pk *pk, int target, slpd_rgba *out, char *err, size_t errlen)
+{
+	if (!out)
+		return -1;
+	RgbaExport e;
+	std::string es;
+	if (!reinterpret_cast<Unpacker *>(pk)->rgba_export(target, &e, &es))
+	{
+		copy_err(es, err, errlen);
+		return -1;
+	}
+	out->fd = e.fd;
+	out->width = e.width;
+	out->height = e.height;
+	out->vk_format = e.vk_format;
+	out->modifier = e.modifier;
+	out->offset = e.offset;
+	out->row_pitch = e.row_pitch;
+	out->size = e.size;
+	return 0;
 }

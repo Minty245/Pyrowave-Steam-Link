@@ -519,11 +519,14 @@ static int hook_ioctl(int fd, unsigned long req, ...)
                 slog("EMU: first frame on decoder fd %d is not SLPW -> stock hardware decode for this session", fd);
                 g_cand.fd = -1;
                 if (fd == g_own_fd) own_unmap();   // v7.20: our mappings would keep the hardware's buffers busy
+                else pk_watch_start(fd);           // v7.26: full-colour HEVC (needs vrlink's own OUTPUT mappings)
             }
         }
     }
+    if (pk_is_fd(fd)) pk_ioctl(fd, req, arg, 1, 0);   // v7.26
     ret = real_ioctl(fd, req, arg);
     err = errno;
+    if (pk_is_fd(fd)) { pk_ioctl(fd, req, arg, 0, ret); errno = err; }
     if (emu_is_cand(fd)) emu_cand_after_ioctl(req, arg, ret);
     if (tracked(fd)) {
         trace_ioctl(fd, req, arg, ret, err);
@@ -549,6 +552,7 @@ static void *hook_mmap(void *addr, size_t len, int prot, int flags, int fd, off_
     void *p = real_mmap(addr, len, prot, flags, fd, off);
     int err = errno;
     if (emu_is_cand(fd)) emu_cand_note_mmap(off, p, len);
+    if (pk_is_fd(fd)) pk_note_mmap(off, p, len);   // v7.26
     if (tracked(fd)) slog("mmap fd=%d len=%zu prot=0x%x flags=0x%x off=0x%llx -> %p", fd, len, prot, flags,
                           (unsigned long long)off, p);
     errno = err;
@@ -558,6 +562,7 @@ static void *hook_mmap(void *addr, size_t len, int prot, int flags, int fd, off_
 static int hook_munmap(void *addr, size_t len)
 {
     emu_note_munmap(addr);
+    pk_note_munmap(addr);   // v7.26
     return real_munmap(addr, len);
 }
 
@@ -761,6 +766,7 @@ static int hook_close(int fd)
 {
     if (emu_is_fd(fd)) { emu_close(fd); untrack(fd); if (fd == g_own_fd) own_unmap(); return real_close(fd); }
     if (fd == g_own_fd) own_unmap();
+    if (pk_is_fd(fd)) pk_watch_stop(fd);   // v7.26
     if (emu_is_cand(fd)) g_cand.fd = -1;
     if (tracked(fd)) { slog("close(%d) [video]", fd); untrack(fd); }
     return real_close(fd);
@@ -873,7 +879,7 @@ static void install_hooks(void)
     open_log();
     char exe[256] = {0};
     if (readlink("/proc/self/exe", exe, sizeof(exe) - 1) < 0) exe[0] = 0;
-    slog("slp layer v7.25 loaded into pid %d (%s), mode %d; decoder stand-in %s", (int)getpid(), exe, g_active,
+    slog("slp layer v7.26 loaded into pid %d (%s), mode %d; decoder stand-in %s", (int)getpid(), exe, g_active,
          emu_armed() ? "ARMED (auto-detect: Pyrowave streams decoded by Pyrowave, HEVC streams by the hardware)" : "not armed (observe-only)");
     if (g_active != 1) {
         slog("compositor mode: %s%s, no GOT patching", g_cfc ? "FULL COLOUR (shared-image swap of the stream views)" : "",
@@ -1091,6 +1097,18 @@ static VkImage g_timg[MAX_TRACKED_IMG];
 static VkFormat g_timg_fmt[MAX_TRACKED_IMG];
 static uint32_t g_timg_w[MAX_TRACKED_IMG], g_timg_h[MAX_TRACKED_IMG];   // v7.19
 static VkDeviceMemory g_surf_mem[MAX_TRACKED_IMG];   // v7.19b: vrlink's exportable stream surface memories
+// v7.26: explicit DRM layout of tracked 2-plane images, and the image / size behind each surface memory (HEVC full
+// colour imports vrlink's decoder surfaces read-only)
+static uint64_t g_timg_mod[MAX_TRACKED_IMG], g_timg_off[MAX_TRACKED_IMG][2], g_timg_pitch[MAX_TRACKED_IMG][2];
+static VkImage g_surf_img[MAX_TRACKED_IMG];
+static uint64_t g_surf_size[MAX_TRACKED_IMG];
+// A stream surface: 2-plane 4:2:0 (8 or 10 bit), as wide as the stream and 4 tiles tall, or taller for a packed
+// full-colour HEVC picture (v7.26: up to 8 tiles).
+static int stream_surface_shape(VkFormat f, uint32_t w, uint32_t h)
+{
+    return (f == VK_FORMAT_G8_B8R8_2PLANE_420_UNORM || f == VK_FORMAT_G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16) &&
+           w >= 256 && h >= 4 * w && h <= 8 * w && !(h & 1);
+}
 static pthread_mutex_t g_img_mutex = PTHREAD_MUTEX_INITIALIZER;
 static void track_image(VkImage im, VkFormat f, uint32_t w, uint32_t h)
 {
@@ -1101,6 +1119,7 @@ static void track_image(VkImage im, VkFormat f, uint32_t w, uint32_t h)
     for (int i = 0; i < MAX_TRACKED_IMG && k < 0; ++i) if (!g_timg[i]) k = i;
     if (k < 0) k = (int)(next_slot++ % MAX_TRACKED_IMG);
     g_timg[k] = im; g_timg_fmt[k] = f; g_timg_w[k] = w; g_timg_h[k] = h;
+    g_timg_mod[k] = 0; memset(g_timg_off[k], 0, sizeof(g_timg_off[k])); memset(g_timg_pitch[k], 0, sizeof(g_timg_pitch[k]));
     pthread_mutex_unlock(&g_img_mutex);
 }
 static void untrack_image(VkImage im)
@@ -1152,9 +1171,18 @@ static VKAPI_ATTR VkResult VKAPI_CALL slp_CreateImage(VkDevice d, const VkImageC
     // Compositor mode: only stream-sized surfaces (the decode images are 1344x5376), so the log cap is not
     // spent on overlay / UI / camera textures.
     // v7.18: any stream size (the stream is 4 tiles tall: width x 4*width, e.g. 1152x4608), YCbCr surfaces only
-    if (g_active == 2) interesting = ci->extent.width >= 512 && ci->extent.height == 4 * ci->extent.width &&
-                                     is_ycbcr_format(ci->format);
+    if (g_active == 2) interesting = ci->extent.width >= 256 && ci->extent.height >= 4 * ci->extent.width &&
+                                     ci->extent.height <= 8 * ci->extent.width && is_ycbcr_format(ci->format);   // v7.26: taller
     if (interesting && r == VK_SUCCESS && out) track_image(*out, ci->format, ci->extent.width, ci->extent.height);
+    if (interesting && r == VK_SUCCESS && out && has_explicit && nplanes == 2) {   // v7.26: remember the plane layout
+        pthread_mutex_lock(&g_img_mutex);
+        for (int i = 0; i < MAX_TRACKED_IMG; ++i)
+            if (g_timg[i] == *out) {
+                g_timg_mod[i] = explicit_mod;
+                for (int p2 = 0; p2 < 2; ++p2) { g_timg_off[i][p2] = pl[p2].offset; g_timg_pitch[i][p2] = pl[p2].rowPitch; }
+            }
+        pthread_mutex_unlock(&g_img_mutex);
+    }
     if (g_active == 1 && r == VK_SUCCESS && has_explicit && nplanes == 2 &&
         ci->format == (EMU_BITS == 8 ? VK_FORMAT_G8_B8R8_2PLANE_420_UNORM : VK_FORMAT_G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16) &&
         ci->extent.width == g_cl_want_w) {
@@ -1203,10 +1231,12 @@ static VKAPI_ATTR VkResult VKAPI_CALL slp_AllocateMemory(VkDevice d, const VkMem
         int ok = 0;
         pthread_mutex_lock(&g_img_mutex);
         for (int i = 0; i < MAX_TRACKED_IMG; ++i)
-            if (g_timg[i] == ded_img && g_timg_fmt[i] == VK_FORMAT_G8_B8R8_2PLANE_420_UNORM && g_timg_w[i] >= 256 &&
-                g_timg_h[i] == 4 * g_timg_w[i]) ok = 1;
+            if (g_timg[i] == ded_img && stream_surface_shape(g_timg_fmt[i], g_timg_w[i], g_timg_h[i])) ok = 1;   // v7.26
         static unsigned next_mem;
-        if (ok) g_surf_mem[next_mem++ % MAX_TRACKED_IMG] = *out;   // ring: old sessions' entries are overwritten
+        if (ok) {   // ring: old sessions' entries are overwritten
+            unsigned k = next_mem++ % MAX_TRACKED_IMG;
+            g_surf_mem[k] = *out; g_surf_img[k] = ded_img; g_surf_size[k] = ai->allocationSize;
+        }
         pthread_mutex_unlock(&g_img_mutex);
     }
     if (g_active == 2 && !(ded_img && image_tracked(ded_img))) return r;
@@ -1221,13 +1251,27 @@ static VKAPI_ATTR VkResult VKAPI_CALL slp_GetMemoryFdKHR(VkDevice d, const VkMem
 {
     PFN_vkGetMemoryFdKHR next = NEXT_DEV(d, PFN_vkGetMemoryFdKHR, "vkGetMemoryFdKHR");
     VkResult r = next ? next(d, gi, fd) : VK_ERROR_INITIALIZATION_FAILED;
-    if (g_active == 1 && g_fc && r == VK_SUCCESS && gi && fd && *fd >= 0 &&
+    if (g_active == 1 && (g_fc || pk_active()) && r == VK_SUCCESS && gi && fd && *fd >= 0 &&
         gi->handleType == VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT) {
         int ok = 0;
+        uint32_t w = 0, h = 0;
+        VkFormat f = VK_FORMAT_UNDEFINED;
+        uint64_t mod = 0, off[2] = {0, 0}, pitch[2] = {0, 0}, size = 0;
         pthread_mutex_lock(&g_img_mutex);
-        for (int i = 0; i < MAX_TRACKED_IMG; ++i) if (g_surf_mem[i] == gi->memory && gi->memory) ok = 1;
+        for (int i = 0; i < MAX_TRACKED_IMG; ++i)
+            if (g_surf_mem[i] == gi->memory && gi->memory) {
+                ok = 1;
+                size = g_surf_size[i];
+                for (int j = 0; j < MAX_TRACKED_IMG; ++j)
+                    if (g_timg[j] && g_timg[j] == g_surf_img[i]) {
+                        w = g_timg_w[j]; h = g_timg_h[j]; f = g_timg_fmt[j]; mod = g_timg_mod[j];
+                        off[0] = g_timg_off[j][0]; off[1] = g_timg_off[j][1];
+                        pitch[0] = g_timg_pitch[j][0]; pitch[1] = g_timg_pitch[j][1];
+                    }
+            }
         pthread_mutex_unlock(&g_img_mutex);
-        if (ok) fc_note_export(*fd);   // v7.19b: register for full colour before vrcompositor asks
+        if (ok && g_fc) fc_note_export(*fd);   // v7.19b: register for full colour before vrcompositor asks
+        if (ok && w && pitch[0] && pk_active()) pk_note_export(*fd, w, h, f, mod, off, pitch, size);   // v7.26
     }
     if (g_active != 2 && vk_log_ok())
         slog("vkGetMemoryFdKHR mem=%p type=0x%x -> %d fd=%d", gi ? (void *)gi->memory : NULL, gi ? gi->handleType : 0, r,

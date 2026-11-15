@@ -2,6 +2,11 @@
 
 ## Unreleased (1.1.0)
 
+- Frame (layer / decoder v7.26): HEVC full colour for Steam Link Full Colour (a separate PC driver). While full colour
+  is armed, stock HEVC sessions are watched for its in-band marker; vrlink's decoder surfaces are imported read-only,
+  and each decoded packed 4:2:2 / 4:4:4 picture is rebuilt into the shared 10-bit image vrcompositor samples (the same
+  handover as Pyrowave's full colour). Stream surfaces may now be up to 8 tiles tall. Host test:
+  `frame/decoder/unpack_test.cpp`.
 - Frame (layer v7.25): image barriers cover every mip level and layer of the blur pyramid and the stability history
   (before, only the first). Edge smoothing and motion-compensated stability were tried (v7.23/v7.24) and removed: no
   visible gain in the headset, and the smoothing looked worse.

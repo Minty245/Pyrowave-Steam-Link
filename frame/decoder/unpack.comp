@@ -1,0 +1,66 @@
+#version 450
+// Steam Link Pyrowave Frame layer v7.26: HEVC full colour (Steam Link Full Colour). The hardware decodes a packed
+// 4:2:0 picture (W x Hp) into vrlink's surface; this rebuilds the full-colour W x H picture into the shared 10-bit
+// image vrcompositor samples (R = Cr, G = Y, B = Cb), black below. Layouts (Steam Link Full Colour, pc/driver/slfc.cpp):
+//   mode 1, 4:2:2 (Hp = H + E): luma top = Y. Chroma planes top = the even rows of the 4:2:2 chroma. The odd rows
+//     O = [Cb odd | Cr odd] (W x H/2): O rows 0..E-1 in the luma strip (rows H..), the rest in the chroma planes from
+//     chroma row H/2. Chroma sample i sits between pixels 2i and 2i+1; a pixel's chroma is linear between the two
+//     nearest samples (the PC's luma adjustment assumes exactly this).
+//   mode 2, 4:4:4 (Hp = 2H): luma top = Y, luma bottom = Cb, Cb plane = Cr's left half, Cr plane = Cr's right half.
+//   mode 0: a plain 4:2:0 picture on top (bilinear chroma, centred siting).
+// The surface is read through an immutable YCbCr sampler (identity model, full range, midpoint siting, NEAREST
+// filters): sampling the centre of luma texel (x, y) returns luma (x, y) and chroma texel (x/2, y/2).
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(set = 0, binding = 0) uniform sampler2D uSrc;
+layout(set = 0, binding = 1, rgb10_a2) uniform writeonly image2D uOut;
+layout(push_constant) uniform PC { int W, H, Hp, E; int mode, pad0, pad1, pad2; } pc;
+
+vec3 S(int x, int y)
+{
+    return textureLod(uSrc, (vec2(x, y) + 0.5) / vec2(pc.W, pc.Hp), 0.0).rgb;   // (Cr, Y, Cb)
+}
+float Yl(int x, int y) { return S(x, y).g; }
+// chroma planes' sample (i, j) as (Cb plane, Cr plane)
+vec2 Cp(int i, int j)
+{
+    vec3 s = S(2 * i, 2 * j);
+    return vec2(s.b, s.r);
+}
+// 4:2:2 chroma (Cb, Cr) of sample i in row y
+vec2 C422(int i, int y)
+{
+    i = clamp(i, 0, pc.W / 2 - 1);
+    if ((y & 1) == 0) return Cp(i, y >> 1);
+    int r = y >> 1;
+    if (r < pc.E) return vec2(Yl(i, pc.H + r), Yl(pc.W / 2 + i, pc.H + r));
+    return Cp(i, pc.H / 2 + (r - pc.E));
+}
+
+void main()
+{
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (p.x >= pc.W || p.y >= pc.Hp) return;
+    if (p.y >= pc.H) {
+        imageStore(uOut, p, vec4(512.0 / 1023.0, 0.0, 512.0 / 1023.0, 1.0));
+        return;
+    }
+    float y = Yl(p.x, p.y);
+    vec2 c;
+    if (pc.mode == 2) {
+        float cr = p.x < pc.W / 2 ? Cp(p.x, p.y).x : Cp(p.x - pc.W / 2, p.y).y;
+        c = vec2(Yl(p.x, pc.H + p.y), cr);
+    } else if (pc.mode == 1) {
+        float t = (float(p.x) - 0.5) * 0.5;
+        float fi = floor(t);
+        int i0 = int(fi);
+        c = mix(C422(i0, p.y), C422(i0 + 1, p.y), t - fi);
+    } else {
+        vec2 t = (vec2(p) - 0.5) * 0.5;
+        vec2 fi = floor(t), f = t - fi;
+        ivec2 i0 = ivec2(fi);
+        ivec2 m = ivec2(pc.W / 2 - 1, pc.H / 2 - 1);
+        ivec2 a = clamp(i0, ivec2(0), m), b = clamp(i0 + 1, ivec2(0), m);
+        c = mix(mix(Cp(a.x, a.y), Cp(b.x, a.y), f.x), mix(Cp(a.x, b.y), Cp(b.x, b.y), f.x), f.y);
+    }
+    imageStore(uOut, p, vec4(c.y, y, c.x, 1.0));
+}

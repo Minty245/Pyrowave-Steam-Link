@@ -136,6 +136,28 @@ typedef void (*pfn_slpd_release)(slpd_decoder *, int);
 typedef int (*pfn_slpd_decode)(slpd_decoder *, const void *, size_t, int, slpd_timing *, char *, size_t);
 typedef int (*pfn_slpd_frame_info)(const void *, size_t, uint32_t *, uint32_t *, uint32_t *, uint32_t *);
 
+// v7.26 HEVC full colour (Steam Link Full Colour): rebuilds the full-colour picture from a packed 4:2:0 HEVC picture
+// the hardware decoded into a vrlink surface (layouts: unpack.comp). Own device; independent of slpd_decoder.
+typedef struct slpd_pk slpd_pk;
+typedef struct slpd_pk_layout { int mode, width, height, packed_height, strip; } slpd_pk_layout;   // mode 0 4:2:0, 1 4:2:2, 2 4:4:4
+SLPD_API slpd_pk *slpd_pk_create(char *err, size_t errlen);   // on success err holds the GPU name
+SLPD_API void slpd_pk_destroy(slpd_pk *pk);
+// vrlink's decoder surface (dma-buf, borrowed; dup()ed): its size, VkFormat, DRM modifier and 2-plane layout. Also
+// creates the surface's shared 10-bit RGBA image. Returns a target or -1.
+SLPD_API int slpd_pk_import(slpd_pk *pk, int dmabuf_fd, uint32_t width, uint32_t height, uint32_t vk_format,
+                            uint64_t modifier, const uint64_t offset[2], const uint64_t pitch[2], uint64_t size, char *err,
+                            size_t errlen);
+SLPD_API void slpd_pk_release(slpd_pk *pk, int target);
+SLPD_API int slpd_pk_unpack(slpd_pk *pk, int target, const slpd_pk_layout *layout, double *ms, char *err, size_t errlen);   // 0 = ok
+SLPD_API int slpd_pk_rgba_export(slpd_pk *pk, int target, slpd_rgba *out, char *err, size_t errlen);   // 0 = ok
+typedef slpd_pk *(*pfn_slpd_pk_create)(char *, size_t);
+typedef void (*pfn_slpd_pk_destroy)(slpd_pk *);
+typedef int (*pfn_slpd_pk_import)(slpd_pk *, int, uint32_t, uint32_t, uint32_t, uint64_t, const uint64_t *, const uint64_t *,
+                                  uint64_t, char *, size_t);
+typedef void (*pfn_slpd_pk_release)(slpd_pk *, int);
+typedef int (*pfn_slpd_pk_unpack)(slpd_pk *, int, const slpd_pk_layout *, double *, char *, size_t);
+typedef int (*pfn_slpd_pk_rgba_export)(slpd_pk *, int, slpd_rgba *, char *, size_t);
+
 #ifdef __cplusplus
 }
 #endif

@@ -19,4 +19,5 @@ g wideblur_apply.comp wideblur_apply
 g wideblur_apply.comp wideblur_apply_r16 -DWB_R16
 g pack_rgba10.comp pack_rgba10
 g pack_rgba10_fx.comp pack_rgba10_fx
+g unpack.comp unpack
 echo "shaders rebuilt"

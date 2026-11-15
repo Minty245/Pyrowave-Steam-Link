@@ -55,6 +55,15 @@ typedef int (*pfn_slpd_frame_chroma_l)(const void *, size_t);
 typedef void (*pfn_slpd_set_merge_l)(void *, int);
 typedef void (*pfn_slpd_set_rgba_compressed_l)(int);
 typedef int (*pfn_slpd_pass_report_l)(void *, double *, double *);
+// v7.26 HEVC full colour (slpd_pk_*, see frame/decoder/slp_pyrodec_capi.h)
+typedef struct { int mode, width, height, packed_height, strip; } slpd_pk_layout_l;
+typedef void *(*pfn_slpd_pk_create_l)(char *, size_t);
+typedef void (*pfn_slpd_pk_destroy_l)(void *);
+typedef int (*pfn_slpd_pk_import_l)(void *, int, uint32_t, uint32_t, uint32_t, uint64_t, const uint64_t *, const uint64_t *,
+                                    uint64_t, char *, size_t);
+typedef void (*pfn_slpd_pk_release_l)(void *, int);
+typedef int (*pfn_slpd_pk_unpack_l)(void *, int, const slpd_pk_layout_l *, double *, char *, size_t);
+typedef int (*pfn_slpd_pk_rgba_export_l)(void *, int, slpd_rgba_l *, char *, size_t);
 
 static __thread int g_internal;   // set while our own decoder creates its Vulkan instance
 
@@ -165,6 +174,12 @@ static pfn_slpd_frame_chroma_l p_frame_chroma;
 static pfn_slpd_set_merge_l p_set_merge, p_set_fast_pyramid;   /* v7.21 */
 static pfn_slpd_set_rgba_compressed_l p_set_rgba_compressed;
 static pfn_slpd_pass_report_l p_pass_report;
+static pfn_slpd_pk_create_l p_pk_create;            /* v7.26 */
+static pfn_slpd_pk_destroy_l p_pk_destroy;
+static pfn_slpd_pk_import_l p_pk_import;
+static pfn_slpd_pk_release_l p_pk_release;
+static pfn_slpd_pk_unpack_l p_pk_unpack;
+static pfn_slpd_pk_rgba_export_l p_pk_rgba_export;
 static int g_rgba_compressed, g_no_merge, g_exact_pyramid;     /* v7.21: arm files, see below */
 static int g_fc_armed;      // v7.19: ~/.local/lib/slp/FULLCOLOUR or /tmp/slp_fullcolour present
 static int g_fc;            // v7.19: the current decoder is in full-colour mode
@@ -269,6 +284,13 @@ static int emu_load_library(void)
     p_set_fast_pyramid = (pfn_slpd_set_merge_l)dlsym(h, "slpd_set_fast_pyramid");
     p_set_rgba_compressed = (pfn_slpd_set_rgba_compressed_l)dlsym(h, "slpd_set_rgba_compressed");
     p_pass_report = (pfn_slpd_pass_report_l)dlsym(h, "slpd_pass_report");
+    p_pk_create = (pfn_slpd_pk_create_l)dlsym(h, "slpd_pk_create");   /* v7.26 */
+    p_pk_destroy = (pfn_slpd_pk_destroy_l)dlsym(h, "slpd_pk_destroy");
+    p_pk_import = (pfn_slpd_pk_import_l)dlsym(h, "slpd_pk_import");
+    p_pk_release = (pfn_slpd_pk_release_l)dlsym(h, "slpd_pk_release");
+    p_pk_unpack = (pfn_slpd_pk_unpack_l)dlsym(h, "slpd_pk_unpack");
+    p_pk_rgba_export = (pfn_slpd_pk_rgba_export_l)dlsym(h, "slpd_pk_rgba_export");
+    if (!p_pk_destroy || !p_pk_import || !p_pk_release || !p_pk_unpack || !p_pk_rgba_export) p_pk_create = NULL;
     {
         typedef const char *(*pfn_ver)(void);
         pfn_ver ver = (pfn_ver)dlsym(h, "slpd_version");
@@ -636,6 +658,330 @@ static int fc_wait_target_locked(uint64_t ino, int *ci_out, int *known_out, doub
     }
 }
 
+
+// ---- v7.26 HEVC full colour (Steam Link Full Colour) ----
+// A stock (non-SLPW) HEVC session stays on the hardware decoder, but is watched while full colour is armed: every
+// OUTPUT frame is scanned for the PC's marker (SEI user data "SLFC-packed-v1.1" + layout). vrlink's decoder surfaces
+// (exported to vrcompositor) are imported read-only into our unpacker, each with a shared 10-bit RGBA image, while a
+// packed stream is on; vrcompositor gets those images through the same handover socket as Pyrowave's full colour.
+// When vrlink dequeues a decoded surface, the full-colour picture is rebuilt into its RGBA image before vrlink sees it.
+typedef struct { int mode, w, h, hp, e; } pk_layout_l;
+typedef struct { uint64_t ino; int fd; int target; uint32_t w, h, vkfmt; uint64_t mod, off[2], pitch[2], size; int out; } pk_surf;
+static struct {
+    int fd;                  // watched hardware decoder fd (-1 = none)
+    void *u;                 // unpacker
+    int failed;              // unpacker could not be created
+    pk_layout_l cur;         // last marker (cur.mode < 0: none on the last frame)
+    uint64_t out_off[EMU_NBUF];
+    emu_map maps[EMU_NBUF];  // vrlink's own mappings of the OUTPUT buffers
+    uint64_t cap_ino[EMU_NBUF];
+    pk_surf surf[FC_PRE];
+    int pending;             // surfaces waiting for import
+    pthread_t thr;
+    int thr_started;
+    // stats
+    uint64_t frames, unpacked, errors;
+    double ms_sum, ms_max, last_log;
+} g_pk = {.fd = -1, .cur = {-1, 0, 0, 0, 0}};
+static pthread_mutex_t g_pk_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t g_pk_cv = PTHREAD_COND_INITIALIZER;      // pending imports / import done
+static int pk_is_fd(int fd) { return fd >= 0 && fd == g_pk.fd; }
+static int pk_active(void) { return g_pk.fd >= 0 && g_pk.u != NULL; }
+
+static const uint8_t k_pk_uuid[16] = {'S', 'L', 'F', 'C', '-', 'p', 'a', 'c', 'k', 'e', 'd', '-', 'v', '1', '.', '1'};
+
+// The marker in an HEVC access unit (SEI payload after the UUID; emulation prevention bytes removed). 1 = found.
+static int pk_parse_marker(const uint8_t *p, size_t n, pk_layout_l *out)
+{
+    if (n > 8192) n = 8192;   // the SEI comes before the slices
+    for (size_t i = 0; i + 16 + 12 <= n; ++i) {
+        if (p[i] != 'S' || memcmp(p + i, k_pk_uuid, 16) != 0) continue;
+        uint8_t d[12];
+        size_t k = 0, j = i + 16;
+        int zeros = 0;
+        while (k < sizeof(d) && j < n) {
+            uint8_t c = p[j++];
+            if (zeros >= 2 && c == 3) { zeros = 0; continue; }
+            zeros = c == 0 ? zeros + 1 : 0;
+            d[k++] = c;
+        }
+        if (k < sizeof(d)) return 0;
+        uint16_t v[5];
+        memcpy(v, d + 2, 10);
+        pk_layout_l l = {d[0], v[0], v[1], v[2], v[3]};
+        if (l.mode > 2 || l.w < 64 || l.h < 64 || l.hp < l.h || l.hp > 8192 || l.e != l.hp - l.h || (l.w & 1) || (l.h & 1))
+            return 0;
+        *out = l;
+        return 1;
+    }
+    return 0;
+}
+
+static void *pk_thread(void *arg)
+{
+    (void)arg;
+    prctl(PR_SET_NAME, "slp-hevc-fc");
+    pthread_mutex_lock(&g_pk_mu);
+    for (;;) {
+        while (!g_pk.pending) pthread_cond_wait(&g_pk_cv, &g_pk_mu);
+        for (int i = 0; i < FC_PRE; ++i) {
+            pk_surf s = g_pk.surf[i];
+            if (!s.ino || s.target != -2) continue;
+            pthread_mutex_unlock(&g_pk_mu);
+            char err[256] = {0};
+            double t0 = mono_ms();
+            int t = p_pk_import(g_pk.u, s.fd, s.w, s.h, s.vkfmt, s.mod, s.off, s.pitch, s.size, err, sizeof(err));
+            static int logged;
+            if (logged++ < 40)
+                slog("HEVC FULL COLOUR: surface %ux%u (%s) %s in %.1f ms%s%s", s.w, s.h,
+                     s.vkfmt == VK_FORMAT_G8_B8R8_2PLANE_420_UNORM ? "8-bit" : "10-bit", t >= 0 ? "imported" : "import FAILED",
+                     mono_ms() - t0, t >= 0 ? "" : ": ", t >= 0 ? "" : err);
+            pthread_mutex_lock(&g_pk_mu);
+            if (g_pk.surf[i].ino == s.ino && g_pk.surf[i].target == -2) g_pk.surf[i].target = t >= 0 ? t : -1;
+            else if (t >= 0) { pthread_mutex_unlock(&g_pk_mu); p_pk_release(g_pk.u, t); pthread_mutex_lock(&g_pk_mu); }
+            pthread_cond_broadcast(&g_pk_cv);
+        }
+        g_pk.pending = 0;
+        for (int i = 0; i < FC_PRE; ++i) if (g_pk.surf[i].ino && g_pk.surf[i].target == -2) g_pk.pending = 1;
+    }
+    return NULL;
+}
+
+// Releases one table entry (caller holds g_pk_mu; drops it around the release).
+static void pk_drop_locked(int i)
+{
+    pk_surf s = g_pk.surf[i];
+    memset(&g_pk.surf[i], 0, sizeof(g_pk.surf[i]));
+    g_pk.surf[i].fd = -1;
+    g_pk.surf[i].target = -1;
+    if (s.fd >= 0 && s.ino) close(s.fd);
+    if (s.target >= 0 && g_pk.u) {
+        pthread_mutex_unlock(&g_pk_mu);
+        p_pk_release(g_pk.u, s.target);
+        pthread_mutex_lock(&g_pk_mu);
+    }
+}
+
+static void fc_server_start(void);
+// A non-SLPW session starts on the hardware: watch it if full colour is armed and the library can unpack.
+static void pk_watch_start(int fd)
+{
+    if (!emu_load_library() || !g_fc_armed) return;
+    if (!p_pk_create) {
+        static int said;
+        if (!said++) slog("HEVC FULL COLOUR: the decoder library is older than v7.26 (no slpd_pk_*); not watching HEVC streams");
+        return;
+    }
+    if (!g_pk.u && !g_pk.failed) {
+        char msg[256] = {0};
+        g_internal = 1;
+        g_pk.u = p_pk_create(msg, sizeof(msg));
+        g_internal = 0;
+        if (!g_pk.u) { g_pk.failed = 1; slog("HEVC FULL COLOUR: unpacker init failed (%s)", msg); return; }
+        slog("HEVC FULL COLOUR: unpacker ready on %s", msg);
+    }
+    if (!g_pk.u) return;
+    pthread_mutex_lock(&g_pk_mu);
+    g_pk.fd = fd;
+    g_pk.cur.mode = -1;
+    for (int i = 0; i < EMU_NBUF; ++i) { g_pk.out_off[i] = g_cand.out_off[i]; g_pk.maps[i] = g_cand.maps[i]; g_pk.cap_ino[i] = 0; }
+    if (!g_pk.thr_started) {
+        pthread_attr_t at;
+        pthread_attr_init(&at);
+        pthread_attr_setdetachstate(&at, PTHREAD_CREATE_DETACHED);
+        g_pk.thr_started = pthread_create(&g_pk.thr, &at, pk_thread, NULL) == 0;
+        pthread_attr_destroy(&at);
+    }
+    pthread_mutex_unlock(&g_pk_mu);
+    fc_server_start();
+    slog("HEVC FULL COLOUR: watching decoder fd %d for packed full-colour HEVC", fd);
+}
+
+static void pk_watch_stop(int fd)
+{
+    if (!pk_is_fd(fd)) return;
+    pthread_mutex_lock(&g_pk_mu);
+    g_pk.fd = -1;
+    for (int i = 0; i < FC_PRE; ++i) if (g_pk.surf[i].ino) pk_drop_locked(i);
+    pthread_mutex_unlock(&g_pk_mu);
+    slog("HEVC FULL COLOUR: decoder fd %d closed (%llu frames, %llu rebuilt in full colour, %llu errors)", fd,
+         (unsigned long long)g_pk.frames, (unsigned long long)g_pk.unpacked, (unsigned long long)g_pk.errors);
+}
+
+static void pk_note_mmap(off_t off, void *addr, size_t len)
+{
+    if (addr == MAP_FAILED || g_pk.fd < 0) return;
+    for (int k = 0; k < EMU_NBUF; ++k)
+        if (!g_pk.maps[k].addr) { g_pk.maps[k].off = (uint64_t)off; g_pk.maps[k].addr = addr; g_pk.maps[k].len = len; return; }
+}
+static void pk_note_munmap(void *addr)
+{
+    for (int k = 0; k < EMU_NBUF; ++k) if (g_pk.maps[k].addr == addr) g_pk.maps[k].addr = NULL;
+}
+
+// Called for every ioctl on the watched fd: before (pre = 1) and after (pre = 0, with its result).
+static void pk_ioctl(int fd, unsigned long req, void *arg, int pre, int ret)
+{
+    (void)fd;
+    if (!arg) return;
+    if (pre && req == VIDIOC_QBUF) {
+        struct v4l2_buffer *b = arg;
+        if (!b->m.planes || b->length < 1 || b->index >= EMU_NBUF) return;
+        if (b->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE) {
+            uint64_t off = g_pk.out_off[b->index];
+            for (int k = 0; k < EMU_NBUF; ++k)
+                if (g_pk.maps[k].addr && g_pk.maps[k].off == off) {
+                    size_t n = b->m.planes[0].bytesused;
+                    if (n > g_pk.maps[k].len) n = g_pk.maps[k].len;
+                    pk_layout_l l;
+                    int had = g_pk.cur.mode >= 0;
+                    if (pk_parse_marker(g_pk.maps[k].addr + b->m.planes[0].data_offset, n, &l)) {
+                        if (!had || memcmp(&l, &g_pk.cur, sizeof(l)) != 0)
+                            slog("HEVC FULL COLOUR: stream is packed %s: %dx%d in a %dx%d picture", l.mode == 2 ? "4:4:4"
+                                 : l.mode == 1 ? "4:2:2" : "4:2:0 (PC fallback)", l.w, l.h, l.w, l.hp);
+                        g_pk.cur = l;
+                    } else {
+                        if (had) slog("HEVC FULL COLOUR: no marker any more: stock HEVC");
+                        g_pk.cur.mode = -1;
+                    }
+                    break;
+                }
+        } else if (b->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE && b->memory == V4L2_MEMORY_DMABUF) {
+            g_pk.cap_ino[b->index] = fd_inode(b->m.planes[0].m.fd);
+        }
+        return;
+    }
+    if (pre) return;
+    if (req == VIDIOC_QUERYBUF && ret == 0) {
+        struct v4l2_buffer *b = arg;
+        if (b->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE && b->m.planes && b->index < EMU_NBUF)
+            g_pk.out_off[b->index] = b->m.planes[0].m.mem_offset;
+        return;
+    }
+    if (req == VIDIOC_REQBUFS && ret == 0) {
+        struct v4l2_requestbuffers *r = arg;
+        if (r->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE) memset(g_pk.cap_ino, 0, sizeof(g_pk.cap_ino));
+        return;
+    }
+    if (req != VIDIOC_DQBUF || ret != 0) return;
+    struct v4l2_buffer *b = arg;
+    if (b->type != V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE || b->index >= EMU_NBUF || !b->m.planes || b->length < 1) return;
+    if ((b->flags & V4L2_BUF_FLAG_ERROR) || !b->m.planes[0].bytesused) return;
+    uint64_t ino = g_pk.cap_ino[b->index];
+    if (!ino) return;
+    pthread_mutex_lock(&g_pk_mu);
+    int target = -1, out = 0;
+    uint32_t sw = 0, sh = 0;
+    for (int i = 0; i < FC_PRE; ++i)
+        if (g_pk.surf[i].ino == ino) { target = g_pk.surf[i].target; out = g_pk.surf[i].out; sw = g_pk.surf[i].w; sh = g_pk.surf[i].h; }
+    pthread_mutex_unlock(&g_pk_mu);
+    g_pk.frames++;
+    if (target < 0 || !out) return;   // not ours, or vrcompositor shows the NV12 surface
+    slpd_pk_layout_l lay;
+    if (g_pk.cur.mode >= 0 && (uint32_t)g_pk.cur.w == sw && (uint32_t)g_pk.cur.hp == sh) {
+        lay.mode = g_pk.cur.mode; lay.width = g_pk.cur.w; lay.height = g_pk.cur.h; lay.packed_height = g_pk.cur.hp;
+        lay.strip = g_pk.cur.e;
+    } else {
+        lay.mode = 0; lay.width = (int)sw; lay.height = (int)sh; lay.packed_height = (int)sh; lay.strip = 0;   // plain picture
+    }
+    char err[256] = {0};
+    double ms = 0;
+    if (p_pk_unpack(g_pk.u, target, &lay, &ms, err, sizeof(err)) != 0) {
+        if (g_pk.errors++ < 10) slog("HEVC FULL COLOUR: unpack failed: %s", err);
+    } else {
+        g_pk.unpacked++;
+        g_pk.ms_sum += ms;
+        if (ms > g_pk.ms_max) g_pk.ms_max = ms;
+    }
+    double now = mono_ms();
+    if (now - g_pk.last_log >= 10000.0) {
+        if (g_pk.last_log > 0 && g_pk.unpacked)
+            slog("HEVC FULL COLOUR: %llu frames, %llu rebuilt (%s), unpack avg %.2f ms max %.2f ms, %llu errors",
+                 (unsigned long long)g_pk.frames, (unsigned long long)g_pk.unpacked,
+                 lay.mode == 2 ? "4:4:4" : lay.mode == 1 ? "4:2:2" : "4:2:0", g_pk.ms_sum / (double)g_pk.unpacked, g_pk.ms_max,
+                 (unsigned long long)g_pk.errors);
+        g_pk.last_log = now;
+        g_pk.ms_max = 0;
+    }
+}
+
+// vrlink exported one of its decoder surfaces (to vrcompositor): register it while a packed stream is on.
+static void pk_note_export(int fd, uint32_t w, uint32_t h, VkFormat fmt, uint64_t mod, const uint64_t off[2],
+                           const uint64_t pitch[2], uint64_t size)
+{
+    if (!pk_active() || g_pk.cur.mode < 0) return;
+    uint64_t ino = fd_inode(fd);
+    if (!ino) return;
+    pthread_mutex_lock(&g_pk_mu);
+    // surfaces of another size belong to an earlier stream size: let them go
+    for (int i = 0; i < FC_PRE; ++i)
+        if (g_pk.surf[i].ino && (g_pk.surf[i].w != w || g_pk.surf[i].h != h)) pk_drop_locked(i);
+    int k = -1;
+    for (int i = 0; i < FC_PRE; ++i) if (g_pk.surf[i].ino == ino) k = i;
+    if (k < 0) {
+        for (int i = 0; i < FC_PRE && k < 0; ++i) if (!g_pk.surf[i].ino) k = i;
+        if (k < 0) k = 0, pk_drop_locked(0);
+        int d = dup(fd);
+        if (d >= 0) {
+            pk_surf s = {ino, d, -2, w, h, (uint32_t)fmt, mod, {off[0], off[1]}, {pitch[0], pitch[1]}, size, 0};
+            g_pk.surf[k] = s;
+            g_pk.pending = 1;
+            pthread_cond_broadcast(&g_pk_cv);
+        }
+    }
+    pthread_mutex_unlock(&g_pk_mu);
+}
+
+// Handover requests for our surfaces. Returns 1 if the inode is ours (rep / *give_fd filled).
+static int pk_serve(const fc_req *q, fc_rep *rep, int *give_fd)
+{
+    if (!pk_active()) return 0;
+    pthread_mutex_lock(&g_pk_mu);
+    int k = -1;
+    for (int i = 0; i < FC_PRE; ++i) if (g_pk.surf[i].ino == q->ino) k = i;
+    if (k < 0) { pthread_mutex_unlock(&g_pk_mu); return 0; }
+    if (q->op == FC_GET) {
+        double t0 = mono_ms();
+        while (g_pk.surf[k].ino == q->ino && g_pk.surf[k].target == -2 && mono_ms() - t0 < 500.0) {
+            struct timespec dl;
+            clock_gettime(CLOCK_REALTIME, &dl);
+            dl.tv_nsec += 20 * 1000000L;
+            if (dl.tv_nsec >= 1000000000L) { dl.tv_sec++; dl.tv_nsec -= 1000000000L; }
+            pthread_cond_timedwait(&g_pk_cv, &g_pk_mu, &dl);
+        }
+        int t = g_pk.surf[k].ino == q->ino ? g_pk.surf[k].target : -1;
+        if (t < 0) { rep->status = t == -2 ? FC_NOT_READY : FC_EXPORT_FAILED; pthread_mutex_unlock(&g_pk_mu); return 1; }
+        pthread_mutex_unlock(&g_pk_mu);
+        slpd_rgba_l e;
+        char err[256] = {0};
+        memset(&e, 0, sizeof(e));
+        if (p_pk_rgba_export(g_pk.u, t, &e, err, sizeof(err)) != 0) {
+            rep->status = FC_EXPORT_FAILED;
+            slog("HEVC FULL COLOUR: no shared image: %s", err);
+            return 1;
+        }
+        *give_fd = e.fd;
+        rep->status = FC_OK;
+        rep->width = e.width; rep->height = e.height; rep->vk_format = e.vk_format;
+        rep->modifier = e.modifier; rep->offset = e.offset; rep->row_pitch = e.row_pitch; rep->size = e.size;
+        pthread_mutex_lock(&g_pk_mu);
+        if (g_pk.surf[k].ino == q->ino) g_pk.surf[k].out = 2;   // both until vrcompositor confirms
+        pthread_mutex_unlock(&g_pk_mu);
+        return 1;
+    }
+    g_pk.surf[k].out = q->op == FC_ACK ? 1 : 0;
+    rep->status = FC_OK;
+    pthread_mutex_unlock(&g_pk_mu);
+    return 1;
+}
+
+static void pk_client_gone(void)
+{
+    pthread_mutex_lock(&g_pk_mu);
+    for (int i = 0; i < FC_PRE; ++i) if (g_pk.surf[i].out == 2) g_pk.surf[i].out = 0;
+    pthread_mutex_unlock(&g_pk_mu);
+}
+
 #define FC_MAXCL 4
 static void *fc_server(void *arg)
 {
@@ -690,6 +1036,7 @@ static void *fc_server(void *arg)
                         if (g_dec && g_fc && p_target_output(g_dec, t) == 2) p_set_target_output(g_dec, t, 0);
                     }
                 pthread_mutex_unlock(&g_fc_mu);
+                pk_client_gone();   // v7.26
                 slog("FULLCOLOUR: vrcompositor disconnected%s", r == 0 ? "" : " (bad request)");
                 close(c);
                 cl[s] = -1;
@@ -699,9 +1046,20 @@ static void *fc_server(void *arg)
             memset(&rep, 0, sizeof(rep));
             rep.magic = FC_MAGIC;
             int give_fd = -1, ci = -1, target = -1;
+            if (pk_serve(&q, &rep, &give_fd)) {   // v7.26 HEVC full colour
+                if (fc_send(c, &rep, give_fd) != 0) slog("FULLCOLOUR: reply failed (%s)", strerror(errno));
+                if (give_fd >= 0) close(give_fd);
+                static int pk_logged;
+                if (pk_logged++ < 96)
+                    slog("HEVC FULL COLOUR: %s -> %s", q.op == FC_GET ? "GET" : q.op == FC_ACK ? "ACK" : "NACK",
+                         rep.status == FC_OK ? (q.op == FC_GET ? "shared image sent" : q.op == FC_ACK ? "vrcompositor samples it"
+                                                                                   : "NV12 only")
+                         : rep.status == FC_NOT_READY ? "not imported yet" : "export failed");
+                continue;
+            }
             pthread_mutex_lock(&g_fc_mu);
             pthread_mutex_lock(&g_emu.mu);
-            if (!g_dec || !g_fc) rep.status = FC_OFF;
+            if (!g_dec || !g_fc) rep.status = FC_OFF;   // (v7.26: our HEVC surfaces were answered above)
             else if (q.op == FC_GET) {
                 // the first unknown surface may just be early (vrlink queues it right after sharing it): wait a
                 // little; later misses answer at once so vrcompositor never stalls for long

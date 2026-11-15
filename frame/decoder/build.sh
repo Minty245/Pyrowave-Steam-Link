@@ -24,9 +24,11 @@ $CXX -O2 -std=c++17 -Wall -Wextra -Wno-missing-field-initializers -DVK_NO_PROTOT
   "$PYRO_LIB/libpyrowave-shared.so.1" -ldl -lpthread -static-libstdc++ -static-libgcc -Wl,-rpath,'$ORIGIN'
 $CXX -O2 -fPIC -std=c++17 -Wall -Wextra -Wno-missing-field-initializers -DVK_NO_PROTOTYPES -fvisibility=hidden $INC \
   -c "$HERE/slp_pyrodec_capi.cpp" -o "$OUT/slp_pyrodec_capi.o"
+$CXX -O2 -fPIC -std=c++17 -Wall -Wextra -Wno-missing-field-initializers -DVK_NO_PROTOTYPES -fvisibility=hidden $INC \
+  -c "$HERE/slp_unpack.cpp" -o "$OUT/slp_unpack.o"   # v7.26 HEVC full colour
 # Decoder library for the vrlink layer: only slpd_* exported; libstdc++ static and hidden so it never
 # interposes on vrlink's own libstdc++.
-$CXX -shared -o "$OUT/libslp_pyrodec.so" "$OUT/slp_pyrodec_capi.o" "$OUT/slp_pyro_dec.o" "$OUT/volk.o" \
+$CXX -shared -o "$OUT/libslp_pyrodec.so" "$OUT/slp_pyrodec_capi.o" "$OUT/slp_pyro_dec.o" "$OUT/slp_unpack.o" "$OUT/volk.o" \
   "$PYRO_LIB/libpyrowave-shared.so.1" -ldl -lpthread -static-libstdc++ -static-libgcc -Wl,--exclude-libs,ALL \
   -Wl,-rpath,'$ORIGIN' -Wl,-z,defs -Wl,--version-script="$HERE/pyrodec.map"
 cp -L "$PYRO_LIB/libpyrowave-shared.so.1" "$OUT/"
