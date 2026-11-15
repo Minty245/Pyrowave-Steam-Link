@@ -518,11 +518,17 @@ static int hook_ioctl(int fd, unsigned long req, ...)
             if (b && b->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE) {
                 slog("EMU: first frame on decoder fd %d is not SLPW -> stock hardware decode for this session", fd);
                 g_cand.fd = -1;
-                if (fd == g_own_fd) own_unmap();   // v7.20: our mappings would keep the hardware's buffers busy
-                else pk_watch_start(fd);           // v7.26: full-colour HEVC (needs vrlink's own OUTPUT mappings)
+                // v7.26/v7.27: full-colour HEVC reads the stream through vrlink's OUTPUT mappings, or, when the session was
+                // adopted (vrlink mapped them before the layer loaded), through the layer's own, kept until vrlink
+                // reallocates the buffers. v7.20: otherwise ours go now (they would keep the hardware's buffers busy).
+                pk_watch_start(fd);
+                if (fd == g_own_fd && !pk_is_fd(fd)) own_unmap();
             }
         }
     }
+    if (pk_is_fd(fd) && fd == g_own_fd && req == VIDIOC_REQBUFS && arg &&
+        ((struct v4l2_requestbuffers *)arg)->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE)
+        own_unmap();   // v7.27: vrlink reallocates its stream buffers; its new mappings come through the mmap hook
     if (pk_is_fd(fd)) pk_ioctl(fd, req, arg, 1, 0);   // v7.26
     ret = real_ioctl(fd, req, arg);
     err = errno;
@@ -716,7 +722,14 @@ static int g_preopen_fd = -1;
 static void own_unmap(void)
 {
     for (int i = 0; i < EMU_NBUF; ++i)
-        if (g_own_map[i]) { munmap(g_own_map[i], g_own_len[i]); g_own_map[i] = NULL; g_own_len[i] = 0; }
+        if (g_own_map[i]) {
+            for (int k = 0; k < EMU_NBUF; ++k)   // v7.27: no table may keep our dead addresses
+            {
+                if (g_cand.maps[k].addr == (uint8_t *)g_own_map[i]) memset(&g_cand.maps[k], 0, sizeof(g_cand.maps[k]));
+                if (g_pk.maps[k].addr == (uint8_t *)g_own_map[i]) memset(&g_pk.maps[k], 0, sizeof(g_pk.maps[k]));
+            }
+            munmap(g_own_map[i], g_own_len[i]); g_own_map[i] = NULL; g_own_len[i] = 0;
+        }
     g_own_fd = -1;
 }
 static void emu_adopt_existing(int fd)
@@ -879,7 +892,7 @@ static void install_hooks(void)
     open_log();
     char exe[256] = {0};
     if (readlink("/proc/self/exe", exe, sizeof(exe) - 1) < 0) exe[0] = 0;
-    slog("slp layer v7.26 loaded into pid %d (%s), mode %d; decoder stand-in %s", (int)getpid(), exe, g_active,
+    slog("slp layer v7.28 loaded into pid %d (%s), mode %d; decoder stand-in %s", (int)getpid(), exe, g_active,
          emu_armed() ? "ARMED (auto-detect: Pyrowave streams decoded by Pyrowave, HEVC streams by the hardware)" : "not armed (observe-only)");
     if (g_active != 1) {
         slog("compositor mode: %s%s, no GOT patching", g_cfc ? "FULL COLOUR (shared-image swap of the stream views)" : "",

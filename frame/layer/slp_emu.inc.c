@@ -785,6 +785,8 @@ static void pk_watch_start(int fd)
     g_pk.fd = fd;
     g_pk.cur.mode = -1;
     for (int i = 0; i < EMU_NBUF; ++i) { g_pk.out_off[i] = g_cand.out_off[i]; g_pk.maps[i] = g_cand.maps[i]; g_pk.cap_ino[i] = 0; }
+    int nmaps = 0;
+    for (int i = 0; i < EMU_NBUF; ++i) if (g_pk.maps[i].addr) nmaps++;
     if (!g_pk.thr_started) {
         pthread_attr_t at;
         pthread_attr_init(&at);
@@ -794,7 +796,7 @@ static void pk_watch_start(int fd)
     }
     pthread_mutex_unlock(&g_pk_mu);
     fc_server_start();
-    slog("HEVC FULL COLOUR: watching decoder fd %d for packed full-colour HEVC", fd);
+    slog("HEVC FULL COLOUR: watching decoder fd %d for packed full-colour HEVC (%d stream buffers readable)", fd, nmaps);
 }
 
 static void pk_watch_stop(int fd)
@@ -829,6 +831,14 @@ static void pk_ioctl(int fd, unsigned long req, void *arg, int pre, int ret)
         if (!b->m.planes || b->length < 1 || b->index >= EMU_NBUF) return;
         if (b->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE) {
             uint64_t off = g_pk.out_off[b->index];
+            int readable = 0;
+            static unsigned unread, unmarked;
+            for (int k = 0; k < EMU_NBUF; ++k) if (g_pk.maps[k].addr && g_pk.maps[k].off == off) readable = 1;
+            if (!readable && unread++ == 30)
+                slog("HEVC FULL COLOUR: stream buffer %u (offset 0x%llx) is not readable by the layer: no marker can be seen",
+                     b->index, (unsigned long long)off);
+            if (readable && g_pk.cur.mode < 0 && ++unmarked == 90)
+                slog("HEVC FULL COLOUR: 90 readable frames without a marker: is Steam Link Full Colour on the PC?");
             for (int k = 0; k < EMU_NBUF; ++k)
                 if (g_pk.maps[k].addr && g_pk.maps[k].off == off) {
                     size_t n = b->m.planes[0].bytesused;

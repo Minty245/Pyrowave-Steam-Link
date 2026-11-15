@@ -2,6 +2,11 @@
 
 ## Unreleased (1.1.0)
 
+- Frame (layer v7.28): HEVC full colour now works when vrlink opened the decoder before the layer loaded (the usual
+  case). The layer keeps its own read-only view of the stream buffers for such sessions (released when vrlink
+  reallocates them), so the marker is seen and pictures are rebuilt. In v7.26 these sessions were never watched and
+  vrcompositor showed the packed picture as plain 4:2:0; v7.27 looked the buffers up in the process map, which does not
+  work (the driver reports every buffer at offset 0). The log now says when the stream can't be read or has no marker.
 - Frame (layer / decoder v7.26): HEVC full colour for Steam Link Full Colour (a separate PC driver). While full colour
   is armed, stock HEVC sessions are watched for its in-band marker; vrlink's decoder surfaces are imported read-only,
   and each decoded packed 4:2:2 / 4:4:4 picture is rebuilt into the shared 10-bit image vrcompositor samples (the same
