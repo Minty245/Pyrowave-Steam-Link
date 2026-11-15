@@ -2,6 +2,10 @@
 
 ## Unreleased (1.1.0)
 
+- Frame (layer v7.30): HEVC full colour keeps working across 4:2:2 / 4:4:4 switches. Steam Link reallocates its frame
+  surfaces at every switch and the driver reuses their handles; the layer's tables kept the old entries, so a new 4:4:4
+  surface could be described with an old 4:2:2 size, vrcompositor refused the picture, and frames flashed between full
+  colour and the packed picture. Reused handles now replace their entries. `fc_test.c` covers it.
 - Frame (layer v7.29): vrcompositor swaps in the rebuilt picture for 10-bit stream surfaces too (HEVC Main10, as Steam
   Link sends it); before, only 8-bit (Pyrowave) views were swapped, so HEVC full colour was unpacked but never shown.
   `fc_test.c` runs with 10-bit surfaces when `SLP_FC_10BIT=1`.

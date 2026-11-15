@@ -303,6 +303,37 @@ int main(void)
     st = cfc_request_locked(FC_GET, fd_inode(surfA), &rep, &fd);
     CHECK(st == FC_OFF && fd < 0, "reconnect + full colour off -> OFF (%d)", st);
     pthread_mutex_unlock(&g_cfc_sock_mu);
+    // v7.30: vrlink's surfaces are reallocated at every stream size change, and the driver hands back the same image and
+    // memory handles. The tables must then describe the new surface only (v7.29 kept the old 768x4096 entry first).
+    printf("handle reuse (vrlink side):\n");
+    {
+        g_active = 1;
+        const VkFormat F10 = VK_FORMAT_G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16;
+        VkImage H = (VkImage)(uintptr_t)0x6000;
+        PFN_vkAllocateMemory am = (PFN_vkAllocateMemory)slp_GetDeviceProcAddr(dev, "vkAllocateMemory");
+        VkExportMemoryAllocateInfo ex = {VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO};
+        ex.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
+        VkMemoryDedicatedAllocateInfo ded = {VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO};
+        ded.pNext = &ex;
+        ded.image = H;
+        VkMemoryAllocateInfo ai = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+        ai.pNext = &ded;
+        VkDeviceMemory m;
+        const uint32_t hs[3] = {4096, 6144, 4096};
+        for (int round = 0; round < 3; ++round) {   // 4:2:2 -> 4:4:4 -> 4:2:2, same handles each time
+            track_image(H, F10, 768, hs[round]);
+            ai.allocationSize = 768ull * hs[round] * 2;
+            s_import_fd = -1;
+            am(dev, &ai, NULL, &m);
+        }
+        int nimg = 0, nmem = 0;
+        uint32_t h = 0;
+        uint64_t size = 0;
+        for (int i = 0; i < MAX_TRACKED_IMG; ++i) if (g_timg[i] == H) { nimg++; h = g_timg_h[i]; }
+        for (int i = 0; i < MAX_TRACKED_IMG; ++i) if (g_surf_mem[i] == m && m) { nmem++; size = g_surf_size[i]; }
+        CHECK(nimg == 1 && h == 4096, "reused image handle: one entry, the newest size (%d entries, h %u)", nimg, h);
+        CHECK(nmem == 1 && size == 768ull * 4096 * 2, "reused memory handle: one entry, the newest surface (%d entries)", nmem);
+    }
     printf("RESULT: %s\n", fails ? "FAIL" : "PASS");
     return fails != 0;
 }

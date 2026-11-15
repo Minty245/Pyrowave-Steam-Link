@@ -732,7 +732,10 @@ static void *pk_thread(void *arg)
             double t0 = mono_ms();
             int t = p_pk_import(g_pk.u, s.fd, s.w, s.h, s.vkfmt, s.mod, s.off, s.pitch, s.size, err, sizeof(err));
             static int logged;
-            if (logged++ < 40)
+            static uint32_t last_w, last_h;   // v7.30: every size change is logged, not just the first 40 imports
+            int new_size = s.w != last_w || s.h != last_h;
+            last_w = s.w; last_h = s.h;
+            if (logged++ < 40 || new_size || t < 0)
                 slog("HEVC FULL COLOUR: surface %ux%u (%s) %s in %.1f ms%s%s", s.w, s.h,
                      s.vkfmt == VK_FORMAT_G8_B8R8_2PLANE_420_UNORM ? "8-bit" : "10-bit", t >= 0 ? "imported" : "import FAILED",
                      mono_ms() - t0, t >= 0 ? "" : ": ", t >= 0 ? "" : err);

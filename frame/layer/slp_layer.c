@@ -892,7 +892,7 @@ static void install_hooks(void)
     open_log();
     char exe[256] = {0};
     if (readlink("/proc/self/exe", exe, sizeof(exe) - 1) < 0) exe[0] = 0;
-    slog("slp layer v7.29 loaded into pid %d (%s), mode %d; decoder stand-in %s", (int)getpid(), exe, g_active,
+    slog("slp layer v7.30 loaded into pid %d (%s), mode %d; decoder stand-in %s", (int)getpid(), exe, g_active,
          emu_armed() ? "ARMED (auto-detect: Pyrowave streams decoded by Pyrowave, HEVC streams by the hardware)" : "not armed (observe-only)");
     if (g_active != 1) {
         slog("compositor mode: %s%s, no GOT patching", g_cfc ? "FULL COLOUR (shared-image swap of the stream views)" : "",
@@ -1129,6 +1129,10 @@ static void track_image(VkImage im, VkFormat f, uint32_t w, uint32_t h)
     // v7.19b: when full, the oldest entry is reused (vrlink never tells us about destroyed images)
     static unsigned next_slot;
     int k = -1;
+    // v7.30: the driver reuses handles of destroyed images; a reused handle replaces its old entry (and any duplicate),
+    // so lookups never see an earlier image's size or layout
+    for (int i = 0; i < MAX_TRACKED_IMG; ++i)
+        if (g_timg[i] == im) { if (k < 0) k = i; else g_timg[i] = VK_NULL_HANDLE; }
     for (int i = 0; i < MAX_TRACKED_IMG && k < 0; ++i) if (!g_timg[i]) k = i;
     if (k < 0) k = (int)(next_slot++ % MAX_TRACKED_IMG);
     g_timg[k] = im; g_timg_fmt[k] = f; g_timg_w[k] = w; g_timg_h[k] = h;
@@ -1247,7 +1251,13 @@ static VKAPI_ATTR VkResult VKAPI_CALL slp_AllocateMemory(VkDevice d, const VkMem
             if (g_timg[i] == ded_img && stream_surface_shape(g_timg_fmt[i], g_timg_w[i], g_timg_h[i])) ok = 1;   // v7.26
         static unsigned next_mem;
         if (ok) {   // ring: old sessions' entries are overwritten
-            unsigned k = next_mem++ % MAX_TRACKED_IMG;
+            // v7.30: memory and image handles are reused by the driver: entries naming either are replaced, not kept
+            int k = -1;
+            for (int i = 0; i < MAX_TRACKED_IMG; ++i)
+                if (g_surf_mem[i] && (g_surf_mem[i] == *out || g_surf_img[i] == ded_img)) {
+                    if (k < 0) k = i; else { g_surf_mem[i] = VK_NULL_HANDLE; g_surf_img[i] = VK_NULL_HANDLE; }
+                }
+            if (k < 0) k = (int)(next_mem++ % MAX_TRACKED_IMG);
             g_surf_mem[k] = *out; g_surf_img[k] = ded_img; g_surf_size[k] = ai->allocationSize;
         }
         pthread_mutex_unlock(&g_img_mutex);
@@ -1539,7 +1549,8 @@ static int cfc_import(VkDevice d, VkImage surf, uint64_t ino, uint32_t sw, uint3
     }
     if (fd >= 0) close(fd);
     if (why) {
-        slog("FULLCOLOUR: surface %p: importing the shared image failed (%s, %d); NV12 kept", (void *)surf, why, (int)r);
+        slog("FULLCOLOUR: surface %p (%ux%u): importing the shared image (%ux%u fmt %u) failed (%s, %d); NV12 kept", (void *)surf,
+             sw, sh, rep.width, rep.height, (unsigned)rep.vk_format, why, (int)r);
         cfc_free(d, img, mem);
         cfc_request(FC_NACK, ino, &rep, NULL);
         return 0;
