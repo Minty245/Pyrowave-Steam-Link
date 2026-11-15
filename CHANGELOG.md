@@ -2,6 +2,7 @@
 
 ## Unreleased (1.1.0)
 
+- Install-Frame.ps1: `-Package <file or folder>` installs a specific Frame package (a folder: its newest one).
 - Frame (layer v7.30): HEVC full colour keeps working across 4:2:2 / 4:4:4 switches. Steam Link reallocates its frame
   surfaces at every switch and the driver reuses their handles; the layer's tables kept the old entries, so a new 4:4:4
   surface could be described with an old 4:2:2 size, vrcompositor refused the picture, and frames flashed between full

@@ -9,6 +9,7 @@
     .\Install-Frame.ps1 -Frame <frame-address>              e.g. -Frame 192.168.1.50 or -Frame steamframe.local
     .\Install-Frame.ps1 -Frame <frame-address> -FullColour  also enables full colour (4:4:4, 10-bit)
     .\Install-Frame.ps1 -Frame <frame-address> -Uninstall   removes it from the Frame
+    -Package <file or folder>   install this Frame package (a folder: its newest SteamLinkPyrowave-Frame-*.tar.gz)
     -Reboot / -NoReboot   reboot the Frame afterwards / don't (default: the Frame asks)
 #>
 param(
@@ -17,7 +18,8 @@ param(
     [switch]$FullColour,
     [switch]$Uninstall,
     [switch]$Reboot,
-    [switch]$NoReboot
+    [switch]$NoReboot,
+    [string]$Package = ''
 )
 $ErrorActionPreference = 'Stop'
 $ssh = Get-Command ssh.exe -ErrorAction SilentlyContinue
@@ -34,8 +36,14 @@ if ($Uninstall) {
     exit 0
 }
 
-$pkg = Get-ChildItem -Path (Join-Path $PSScriptRoot 'frame') -Filter 'SteamLinkPyrowave-Frame-*.tar.gz' | Select-Object -First 1
-if (-not $pkg) { throw 'Frame package not found next to this script (frame\SteamLinkPyrowave-Frame-*.tar.gz).' }
+$from = if ($Package) { $Package } else { Join-Path $PSScriptRoot 'frame' }
+if (Test-Path -LiteralPath $from -PathType Leaf) { $pkg = Get-Item -LiteralPath $from }
+else {
+    $pkg = Get-ChildItem -LiteralPath $from -Filter 'SteamLinkPyrowave-Frame-*.tar.gz' -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending | Select-Object -First 1
+}
+if (-not $pkg) { throw "Frame package not found ($from\SteamLinkPyrowave-Frame-*.tar.gz)." }
+Write-Host ("Package: {0} ({1:N0} bytes, built {2})" -f $pkg.FullName, $pkg.Length, $pkg.LastWriteTime)
 $dir = $pkg.Name -replace '\.tar\.gz$', ''
 Write-Host "Copying $($pkg.Name) to $target (ssh asks for the Frame password)..."
 & scp.exe $pkg.FullName "${target}:/tmp/$($pkg.Name)"
