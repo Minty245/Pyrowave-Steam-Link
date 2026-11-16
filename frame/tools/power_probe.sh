@@ -60,4 +60,5 @@ if [ -n "$TS0" ] && [ -n "$TS1" ]; then
   join <(echo "$TS0" | sort) <(echo "$TS1" | sort) | awk '{d=$3-$2; t+=d; f[$1]=d} END{for (k in f) if (f[k]>0) printf "%5.0f MHz  %6.1f s  %5.1f%%\n", k/1e6, f[k]/1000, 100*f[k]/t}' | sort -n
 fi
 } 2>&1 | tee "$OUT"
+cp -f "$OUT" "$HERE/power-latest.txt"   # fixed-name copy, easy to fetch over SSH
 echo "wrote $OUT"

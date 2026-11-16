@@ -2,6 +2,11 @@
 
 ## Unreleased (1.1.0)
 
+- Frame (layer v7.33, decoder 7.33): HEVC full colour does less work per frame. The rebuild covers only the
+  picture's rows (the rows below stay black from the clear at import: a quarter of the work in 4:2:2, half in 4:4:4),
+  and the shared images use the GPU's compressed tiling (UBWC) where the driver allows, as Pyrowave's full colour has
+  since v7.22 (`RGBA_LINEAR` turns it off). `power_probe.sh` also keeps a fixed-name copy of its result
+  (`power-latest.txt`).
 - Frame (layer v7.32, decoder 7.32): HEVC full colour layout 3, the tiled 4:4:4 of Steam Link Full Colour 0.2.0 (Cr in
   64x64 blocks whose quarters sit in the chroma samples over the block, so reds are coded at their own area's foveation
   QP; less red noise in the sharp centre). Layout 2 (Full Colour 0.1.x) still works. `unpack_test` covers both.

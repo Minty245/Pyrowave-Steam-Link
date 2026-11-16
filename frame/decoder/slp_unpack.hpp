@@ -40,6 +40,9 @@ public:
 
 	bool init(std::string *err);
 	std::string device_name() const;
+	// v7.33: shared RGBA images in the GPU's compressed tiling (UBWC) where the driver allows (default on); applies to
+	// surfaces imported afterwards.
+	void set_rgba_compressed(bool on);
 	// Imports a decoder surface (read only) and creates its shared 10-bit RGBA image of the same size. Index or -1.
 	int import_surface(const SurfaceDesc &d, std::string *err);
 	void release(int index);

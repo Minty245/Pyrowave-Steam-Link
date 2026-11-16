@@ -10,6 +10,7 @@
 #include "volk.h"
 #include "unpack_spv.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -72,6 +73,7 @@ struct Unpacker::Impl
 	VkPhysicalDeviceMemoryProperties memprops = {};
 	VkPhysicalDeviceProperties props = {};
 	bool has_modifiers = false, has_foreign = false;
+	bool rgba_compressed = true;   // v7.33: UBWC shared images where the driver allows (Unpacker::set_rgba_compressed)
 	VkCommandPool pool = VK_NULL_HANDLE;
 	VkCommandBuffer cmd = VK_NULL_HANDLE;
 	VkFence fence = VK_NULL_HANDLE;
@@ -176,13 +178,60 @@ struct Unpacker::Impl
 		return int(pipes.size() - 1);
 	}
 
+	// a modifier's properties for a format (planes, tiling features); 0 when the driver does not offer it
+	bool mod_props(VkFormat fmt, uint64_t modifier, uint32_t *planes, VkFormatFeatureFlags *features) const
+	{
+		VkDrmFormatModifierPropertiesListEXT l = {VK_STRUCTURE_TYPE_DRM_FORMAT_MODIFIER_PROPERTIES_LIST_EXT};
+		VkFormatProperties2 fp = {VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2};
+		fp.pNext = &l;
+		vkGetPhysicalDeviceFormatProperties2(gpu, fmt, &fp);
+		std::vector<VkDrmFormatModifierPropertiesEXT> v(l.drmFormatModifierCount);
+		l.pDrmFormatModifierProperties = v.data();
+		vkGetPhysicalDeviceFormatProperties2(gpu, fmt, &fp);
+		for (auto &e : v)
+			if (e.drmFormatModifier == modifier) {
+				*planes = e.drmFormatModifierPlaneCount;
+				*features = e.drmFormatModifierTilingFeatures;
+				return true;
+			}
+		return false;
+	}
+
 	bool create_rgba(Surf &t, std::string *err)
 	{
 		const VkFormat fmt = VK_FORMAT_A2B10G10R10_UNORM_PACK32;
 		const uint64_t linear = 0;   // DRM_FORMAT_MOD_LINEAR (vrcompositor imports it with this modifier)
+		// v7.33: the GPU's compressed tiling (UBWC), as the Pyrowave full-colour images since v7.22: our writes and
+		// vrcompositor's reads move far less memory than LINEAR at 4 bytes per pixel. Used only when the driver offers
+		// it for this format as one memory plane with storage and sampling; anything else falls back to LINEAR.
+		const uint64_t ubwc = 0x0500000000000001ull;   // DRM_FORMAT_MOD_QCOM_COMPRESSED
+		const VkFormatFeatureFlags need = VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+		                                  VK_FORMAT_FEATURE_TRANSFER_DST_BIT;
+		uint32_t planes = 0;
+		VkFormatFeatureFlags feats = 0;
+		const bool try_ubwc = has_modifiers && rgba_compressed && mod_props(fmt, ubwc, &planes, &feats) && planes == 1 &&
+		                      (feats & need) == need;
+		for (int attempt = try_ubwc ? 0 : 1; attempt < 2; ++attempt) {
+			if (create_rgba_with(t, attempt == 0 ? ubwc : linear, err)) return true;
+			destroy_rgba(t);
+		}
+		return false;
+	}
+
+	void destroy_rgba(Surf &t)
+	{
+		if (t.rview) vkDestroyImageView(device, t.rview, nullptr);
+		if (t.rimg) vkDestroyImage(device, t.rimg, nullptr);
+		if (t.rmem) vkFreeMemory(device, t.rmem, nullptr);
+		t.rview = VK_NULL_HANDLE; t.rimg = VK_NULL_HANDLE; t.rmem = VK_NULL_HANDLE;
+	}
+
+	bool create_rgba_with(Surf &t, const uint64_t modifier, std::string *err)
+	{
+		const VkFormat fmt = VK_FORMAT_A2B10G10R10_UNORM_PACK32;
 		VkImageDrmFormatModifierListCreateInfoEXT ml = {VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_LIST_CREATE_INFO_EXT};
 		ml.drmFormatModifierCount = 1;
-		ml.pDrmFormatModifiers = &linear;
+		ml.pDrmFormatModifiers = &modifier;
 		VkExternalMemoryImageCreateInfo ext = {VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO};
 		ext.pNext = &ml;
 		ext.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
@@ -214,7 +263,7 @@ struct Unpacker::Impl
 		if ((r = vkBindImageMemory(device, t.rimg, t.rmem, 0))) return ufail(err, "vkBindImageMemory(full-colour RGBA)", r);
 		t.rexport = has_modifiers;
 		t.rsize = mr.size;
-		t.rmod = 0;
+		t.rmod = has_modifiers ? modifier : 0;
 		if (has_modifiers) {
 			VkImageSubresource sub = {VK_IMAGE_ASPECT_MEMORY_PLANE_0_BIT_EXT, 0, 0};
 			VkSubresourceLayout lay = {};
@@ -418,6 +467,8 @@ bool Unpacker::init(std::string *err)
 	return true;
 }
 
+void Unpacker::set_rgba_compressed(bool on) { impl->rgba_compressed = on; }
+
 std::string Unpacker::device_name() const { return impl->props.deviceName; }
 
 int Unpacker::import_surface(const SurfaceDesc &d, std::string *err)
@@ -515,7 +566,9 @@ bool Unpacker::unpack(int index, const PackedLayout &l, double *ms, std::string 
 	vkCmdBindDescriptorSets(m.cmd, VK_PIPELINE_BIND_POINT_COMPUTE, p.pl, 0, 1, &t.set, 0, nullptr);
 	int32_t pc[8] = {l.width, l.height, l.packed_height, l.strip, l.mode, int32_t(t.w), int32_t(t.h), 0};
 	vkCmdPushConstants(m.cmd, p.pl, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), pc);
-	vkCmdDispatch(m.cmd, (t.w + 15) / 16, (t.h + 15) / 16, 1);
+	// v7.33: only the picture's rows: the rows below stay black from the clear at import (vrcompositor never shows
+	// them), which saved a quarter (4:2:2) to half (4:4:4) of the work and writes per frame
+	vkCmdDispatch(m.cmd, (t.w + 15) / 16, (uint32_t(std::min(int(t.h), l.height)) + 15) / 16, 1);
 	// release both back
 	Impl::barrier(m.cmd, t.rimg, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
 	              VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, VK_PIPELINE_STAGE_2_NONE, 0, t.rexport ? own : VK_QUEUE_FAMILY_IGNORED, rfam);

@@ -234,7 +234,7 @@ SLPD_API int slpd_frame_chroma(const void *frame, size_t size)
 // v7.22: version of this library (the layer logs it)
 SLPD_API const char *slpd_version(void)
 {
-	return "7.32";
+	return "7.33";
 }
 
 // v7.21 power options and per-pass GPU times
@@ -285,6 +285,11 @@ SLPD_API int slpd_frame_info(const void *frame, size_t size, uint32_t *width, ui
 }
 
 // ---- v7.26 HEVC full colour ----
+SLPD_API void slpd_pk_set_rgba_compressed(slpd_pk *pk, int on)
+{
+	if (pk) reinterpret_cast<Unpacker *>(pk)->set_rgba_compressed(on != 0);
+}
+
 SLPD_API slpd_pk *slpd_pk_create(char *err, size_t errlen)
 {
 	auto *u = new Unpacker();

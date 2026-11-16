@@ -142,6 +142,8 @@ typedef struct slpd_pk slpd_pk;
 typedef struct slpd_pk_layout { int mode, width, height, packed_height, strip; } slpd_pk_layout;   // mode 0 4:2:0, 1 4:2:2, 2 4:4:4
 SLPD_API slpd_pk *slpd_pk_create(char *err, size_t errlen);   // on success err holds the GPU name
 SLPD_API void slpd_pk_destroy(slpd_pk *pk);
+// v7.33: shared RGBA images compressed (UBWC) where the driver allows (default 1) or LINEAR (0); for later imports.
+SLPD_API void slpd_pk_set_rgba_compressed(slpd_pk *pk, int on);
 // vrlink's decoder surface (dma-buf, borrowed; dup()ed): its size, VkFormat, DRM modifier and 2-plane layout. Also
 // creates the surface's shared 10-bit RGBA image. Returns a target or -1.
 SLPD_API int slpd_pk_import(slpd_pk *pk, int dmabuf_fd, uint32_t width, uint32_t height, uint32_t vk_format,
@@ -152,6 +154,7 @@ SLPD_API int slpd_pk_unpack(slpd_pk *pk, int target, const slpd_pk_layout *layou
 SLPD_API int slpd_pk_rgba_export(slpd_pk *pk, int target, slpd_rgba *out, char *err, size_t errlen);   // 0 = ok
 typedef slpd_pk *(*pfn_slpd_pk_create)(char *, size_t);
 typedef void (*pfn_slpd_pk_destroy)(slpd_pk *);
+typedef void (*pfn_slpd_pk_set_rgba_compressed)(slpd_pk *, int);
 typedef int (*pfn_slpd_pk_import)(slpd_pk *, int, uint32_t, uint32_t, uint32_t, uint64_t, const uint64_t *, const uint64_t *,
                                   uint64_t, char *, size_t);
 typedef void (*pfn_slpd_pk_release)(slpd_pk *, int);

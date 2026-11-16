@@ -54,6 +54,7 @@ typedef int (*pfn_slpd_frame_chroma_l)(const void *, size_t);
 // v7.21 power options and per-pass GPU times (optional)
 typedef void (*pfn_slpd_set_merge_l)(void *, int);
 typedef void (*pfn_slpd_set_rgba_compressed_l)(int);
+typedef void (*pfn_slpd_pk_set_rgba_compressed_l)(void *, int);   /* v7.33 */
 typedef int (*pfn_slpd_pass_report_l)(void *, double *, double *);
 // v7.26 HEVC full colour (slpd_pk_*, see frame/decoder/slp_pyrodec_capi.h)
 typedef struct { int mode, width, height, packed_height, strip; } slpd_pk_layout_l;
@@ -175,6 +176,7 @@ static pfn_slpd_set_merge_l p_set_merge, p_set_fast_pyramid;   /* v7.21 */
 static pfn_slpd_set_rgba_compressed_l p_set_rgba_compressed;
 static pfn_slpd_pass_report_l p_pass_report;
 static pfn_slpd_pk_create_l p_pk_create;            /* v7.26 */
+static pfn_slpd_pk_set_rgba_compressed_l p_pk_set_rgba_compressed;   /* v7.33, optional */
 static pfn_slpd_pk_destroy_l p_pk_destroy;
 static pfn_slpd_pk_import_l p_pk_import;
 static pfn_slpd_pk_release_l p_pk_release;
@@ -285,6 +287,7 @@ static int emu_load_library(void)
     p_set_rgba_compressed = (pfn_slpd_set_rgba_compressed_l)dlsym(h, "slpd_set_rgba_compressed");
     p_pass_report = (pfn_slpd_pass_report_l)dlsym(h, "slpd_pass_report");
     p_pk_create = (pfn_slpd_pk_create_l)dlsym(h, "slpd_pk_create");   /* v7.26 */
+    p_pk_set_rgba_compressed = (pfn_slpd_pk_set_rgba_compressed_l)dlsym(h, "slpd_pk_set_rgba_compressed");   /* v7.33 */
     p_pk_destroy = (pfn_slpd_pk_destroy_l)dlsym(h, "slpd_pk_destroy");
     p_pk_import = (pfn_slpd_pk_import_l)dlsym(h, "slpd_pk_import");
     p_pk_release = (pfn_slpd_pk_release_l)dlsym(h, "slpd_pk_release");
@@ -781,7 +784,15 @@ static void pk_watch_start(int fd)
         g_pk.u = p_pk_create(msg, sizeof(msg));
         g_internal = 0;
         if (!g_pk.u) { g_pk.failed = 1; slog("HEVC FULL COLOUR: unpacker init failed (%s)", msg); return; }
-        slog("HEVC FULL COLOUR: unpacker ready on %s", msg);
+        // v7.33: compressed (UBWC) shared images unless RGBA_LINEAR is set (as for Pyrowave full colour since v7.22)
+        char lp[512];
+        const char *home = getenv("HOME");
+        snprintf(lp, sizeof(lp), "%s/.local/lib/slp/RGBA_LINEAR", home ? home : "/home/steamos");
+        int compressed = !file_exists(lp);
+        pfn_slpd_pk_set_rgba_compressed_l set_c = p_pk_set_rgba_compressed;
+        if (set_c) set_c(g_pk.u, compressed);
+        slog("HEVC FULL COLOUR: unpacker ready on %s; shared images %s", msg,
+             !set_c ? "LINEAR (decoder library older than v7.33)" : compressed ? "compressed (UBWC) where the driver allows" : "LINEAR (RGBA_LINEAR)");
     }
     if (!g_pk.u) return;
     pthread_mutex_lock(&g_pk_mu);
