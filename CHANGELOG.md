@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased (1.1.0)
+## 1.1.0 - 2026-11-17
+
+Headset support for HEVC full colour from [Steam Link Full Colour](https://github.com/Minty245/Steam-Link-Full-Colour)
+(install the Frame package with `--full-colour`), installer fixes, and like-for-like latency numbers in the README
+(Pyrowave matches Steam Link's HEVC).
 
 - Frame (layer v7.33, decoder 7.33): HEVC full colour does less work per frame. The rebuild covers only the
   picture's rows (the rows below stay black from the clear at import: a quarter of the work in 4:2:2, half in 4:4:4),
