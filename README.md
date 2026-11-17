@@ -6,7 +6,8 @@ networking, pacing, menus and bitrate setting. Only the video codec changes.
 
 Pyrowave is an intra-only wavelet codec that runs on the GPU. Every frame stands on its own, so a lost frame is fixed by
 the very next one: no smearing or waiting for a keyframe after a hiccup. At high bitrates it holds fine detail and text
-very well.
+very well. It is also fast: in a demanding game we measured about **13 ms less latency** than HEVC (see
+[Latency](#latency)).
 
 **What you get**
 
@@ -21,12 +22,33 @@ very well.
 - Optional **full colour**: colour at full resolution (4:4:4) and 10-bit output into the Frame's compositor.
 - **Pyrowave Link**, a settings app on the PC and in the SteamVR dashboard. Changes apply live.
 
+- Lower latency in heavy games: Pyrowave's encode and decode take about the same time whatever the picture, where
+  HEVC's encode grew to around 16 ms in our heaviest test.
+
 **Costs**
 
 - The Frame decodes on its GPU, which uses more battery than the hardware HEVC decoder (roughly 15-17 W against
   9-10 W in our tests at 144 Hz).
 - An intra-only codec needs more bitrate than HEVC for the same quality. A fast, clean wireless link (6 GHz, little
   interference) and a high Steam Link bandwidth target work best.
+
+## Latency
+
+Measured from Steam Link's own debug graphs (SteamVR Remote Detailed Debug), Elite Dangerous at about 65 fps, Steam
+Frame at 144 Hz, one session per codec on the same PC and network. Times are averages per frame, in ms.
+
+| | Pyrowave | HEVC (Steam Link) |
+|---|---|---|
+| Encode (PC) | 2.0 | 15.8 |
+| Send and receive | 10.6 | 5.9 |
+| Decode (Frame) | 4.2 | 7.3 |
+| **Total, start of frame to display** | **40.8** | **53.5** |
+| Typical range (10th to 90th percentile) | 36 to 46 | 48 to 59 |
+
+Pyrowave's encode and decode cost about the same however complex the picture is. Its higher bitrate costs a few
+milliseconds more on the network, but the encode saving is much larger. The gap is biggest in demanding games like
+this one; in games that are light to render and easy to encode, HEVC's encode is faster and the difference is
+smaller. Results depend on the PC, the game, the network and the bitrate.
 
 ## Requirements
 
@@ -99,6 +121,12 @@ From Linux, cross-compiling for Windows and the Frame: see [docs/BUILDING.md](do
 `scripts/build-release.sh`. Pyrowave itself comes prebuilt in `prebuilt/` from the
 [Steam Link Pyrowave fork](https://github.com/Minty245/pyrowave/tree/steam-link-pyrowave) (see
 [prebuilt/README.md](prebuilt/README.md)).
+
+## AI disclosure
+
+This project was built with substantial help from AI: much of the code, the tools and the documentation were written
+with Anthropic's Claude, directed by the author, who tested every build on the hardware and reviewed what went in.
+Report problems through the issue tracker like any other bug.
 
 ## Credits and licence
 
