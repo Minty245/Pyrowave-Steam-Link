@@ -6,8 +6,8 @@ networking, pacing, menus and bitrate setting. Only the video codec changes.
 
 Pyrowave is an intra-only wavelet codec that runs on the GPU. Every frame stands on its own, so a lost frame is fixed by
 the very next one: no smearing or waiting for a keyframe after a hiccup. At high bitrates it holds fine detail and text
-very well. It is also fast: in a demanding game we measured about **13 ms less latency** than HEVC (see
-[Latency](#latency)).
+very well. Its quality comes from the codec itself, with no extra processing step in the encoder's path, and its
+latency matches Steam Link's HEVC (see [Latency](#latency)).
 
 **What you get**
 
@@ -21,9 +21,8 @@ very well. It is also fast: in a demanding game we measured about **13 ms less l
   saturated edges and coloured text keep their brightness (also in the periphery's colour blur).
 - Optional **full colour**: colour at full resolution (4:4:4) and 10-bit output into the Frame's compositor.
 - **Pyrowave Link**, a settings app on the PC and in the SteamVR dashboard. Changes apply live.
-
-- Lower latency in heavy games: Pyrowave's encode and decode take about the same time whatever the picture, where
-  HEVC's encode grew to around 16 ms in our heaviest test.
+- The same latency as HEVC: the Frame decodes faster, which balances the extra time the higher bitrate spends on the
+  network.
 
 **Costs**
 
@@ -34,21 +33,24 @@ very well. It is also fast: in a demanding game we measured about **13 ms less l
 
 ## Latency
 
-Measured from Steam Link's own debug graphs (SteamVR Remote Detailed Debug), Elite Dangerous at about 65 fps, Steam
-Frame at 144 Hz, one session per codec on the same PC and network. Times are averages per frame, in ms.
+Measured from Steam Link's own debug graphs (SteamVR Remote Detailed Debug): Elite Dangerous at about 69 fps, Steam
+Frame at 144 Hz, back-to-back sessions on the same PC and network with nothing else in the encoder's path. Times are
+averages per frame, in ms.
 
-| | Pyrowave | HEVC (Steam Link) |
-|---|---|---|
-| Encode (PC) | 2.0 | 15.8 |
-| Send and receive | 10.6 | 5.9 |
-| Decode (Frame) | 4.2 | 7.3 |
-| **Total, start of frame to display** | **40.8** | **53.5** |
-| Typical range (10th to 90th percentile) | 36 to 46 | 48 to 59 |
+| | HEVC (Steam Link) | Pyrowave | Pyrowave, full colour |
+|---|---|---|---|
+| Encode (PC) | 1.6 | 2.1 | 1.8 |
+| Send and receive | 5.0 | 9.3 | 9.0 |
+| Decode (Frame) | 7.8 | 3.4 | 4.2 |
+| **Total, start of frame to display** | **38.3** | **39.6** | **38.6** |
+| Typical range (10th to 90th percentile) | 34 to 43 | 36 to 45 | 34 to 43 |
+| Bitrate | about 210 Mbps | about 385 Mbps | about 400 Mbps |
 
-Pyrowave's encode and decode cost about the same however complex the picture is. Its higher bitrate costs a few
-milliseconds more on the network, but the encode saving is much larger. The gap is biggest in demanding games like
-this one; in games that are light to render and easy to encode, HEVC's encode is faster and the difference is
-smaller. Results depend on the PC, the game, the network and the bitrate.
+The totals are within the run-to-run variation of about 1 ms. Pyrowave decodes in about half HEVC's time on the
+Frame, and its higher bitrate spends about as much extra on the network. Full colour costs Pyrowave under 1 ms of
+decode. Tools that add their own processing around Steam Link's HEVC encoder can add to its encode time (one we tried
+added about 15 ms in this game); Pyrowave's quality needs no such step. Results depend on the PC, the game, the network
+and the bitrate.
 
 ## Requirements
 
