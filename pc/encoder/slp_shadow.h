@@ -30,6 +30,7 @@ bool slp_shadow_take_frame(uint64_t encode_index, std::vector<uint8_t> &out, int
 void slp_substitute_brake(const char *why);
 
 // Shared helpers implemented in slp_nvenc_hook.cpp.
+bool slp_atlas_stacked();   // the atlas is four views stacked vertically (false for AMD's 2x2)
 double slp_vrlink_avg_bps();
 void slp_vrlink_amf_target_bps(uint64_t target_bps);
 uint64_t slp_vrlink_dips_take();

@@ -1074,10 +1074,13 @@ static std::vector<uint8_t> &subbuf_for(const void *out)
 static void append_frame_settings(std::vector<uint8_t> &buf)
 {
     static uint32_t gen = 0xffffffffu;
+    static bool was_stacked = true;
     static uint8_t tr[48];
     uint32_t g = slp_settings_generation();
-    if (g != gen) {
+    const bool stacked = slp_atlas_stacked();
+    if (g != gen || stacked != was_stacked) {
         gen = g;
+        was_stacked = stacked;
         memset(tr, 0, sizeof(tr));
         uint32_t magic = 0x53504c53u;   // "SLPS"
         uint16_t ver = 1, size = 48;
@@ -1099,6 +1102,15 @@ static void append_frame_settings(std::vector<uint8_t> &buf)
         // v44: wide-view blur on the Frame (layer v7.13+; older layers ignore these bytes). 0 px = off.
         float wb[2] = {(float)std::min(8.0, std::max(0.0, slp_setting("frame.wide_blur", 0))),
                        (float)std::min(3.0, std::max(0.0, slp_setting("frame.wide_blur_contrast", 1)))};
+        if (!stacked) {
+            // AMD's 2x2 atlas: the headset filters find the views by the stacked layout; all off (plain decode)
+            memset(f, 0, sizeof(f));
+            b[0] = b[1] = b[2] = b[3] = 0;
+            wb[0] = 0;
+            memcpy(tr + 12, f, 24);
+            memcpy(tr + 36, b, 4);
+            slp_log("[SET] atlas is not four stacked views: headset filters off");
+        }
         memcpy(tr + 40, wb, 8);
         slp_log("[SET] Frame settings #%u: post-filter %s, deblock %s wide %.2f inset %.2f (grids %d, %s), sharpen %.2f (%.2f-%.2f)",
                 g, b[3] ? "on" : "off", b[0] ? "smooth" : "seam", f[0], f[1], (int)b[1], b[2] ? "follows bits/pixel" : "fixed",
@@ -1130,6 +1142,10 @@ static void append_ramp(std::vector<uint8_t> &buf)
     memcpy(b + 8, f, 64);
     float t[2] = {(float)std::min(1.0, std::max(0.0, slp_setting("frame.temporal", 0))),
                   (float)std::min(4.0, std::max(0.0, slp_setting("frame.temporal_clamp", 1)))};
+    if (!slp_atlas_stacked()) {   // AMD's 2x2 atlas: no ramp, no headset stability (both assume stacked views)
+        memset(b + 8, 0, 64);
+        t[0] = 0;
+    }
     memcpy(b + 72, t, 8);
     buf.insert(buf.end(), b, b + sizeof(b));
 }

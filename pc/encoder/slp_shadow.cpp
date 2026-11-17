@@ -164,6 +164,9 @@ ID3D11DeviceContext4  *g_ctx4 = nullptr;
 ID3D11Fence           *g_fence = nullptr;
 uint64_t               g_fence_value = 0;        // encoder thread only
 UINT                   g_width = 0, g_height = 0;
+// The four views stacked vertically (NVIDIA's atlas). AMD's is 2x2: the layout-aware parts (per-view chroma clamp,
+// region weights / CSF / inset boxes, headset filters) assume stacked views and are skipped for it.
+bool atlas_stacked() { return !g_width || g_height == 4 * g_width; }
 
 // Handed from the encoder thread to the worker for Vulkan-side import.
 HANDLE                 g_slot_handles[kSlots] = {};
@@ -1118,6 +1121,11 @@ void slp_apply_region_weights()
         if (!fn) slp_log("[SUB] region weights: this libpyrowave-shared-1.dll has no pyrowave_encoder_set_slp_region_weights (old build); uniform weighting");
     }
     if (!g_penc) return;
+    if (!atlas_stacked()) {   // AMD's 2x2 atlas: the weights would land on the wrong views; uniform weighting
+        static bool told;
+        if (!told) { told = true; slp_log("[SUB] atlas %ux%u is not four stacked views: region weights / CSF off", g_width, g_height); }
+        return;
+    }
     // v25: per-tile CSF (Nyquist of the inset / wide views / display) from the prefilter settings + locator.
     {
         using csf_t = void (*)(pyrowave_encoder, float, float, float);
@@ -1247,7 +1255,8 @@ void slp_apply_region_weights()
         if (g_regions_dirty.load()) cur_flags = 0xffffffffu;
         if (y420_fn && want_flags != cur_flags) {
             cur_flags = want_flags;
-            y420_fn(g_penc, want_flags, g_width, g_height / 4);   // four views stacked vertically
+            // four views stacked vertically; otherwise (AMD's 2x2) only the picture's own edges are clamped
+            y420_fn(g_penc, want_flags, g_width, atlas_stacked() ? g_height / 4 : g_height);
             slp_log("[SUB] 4:2:0 conversion: sharp chroma %s, luma adjustment %s%s", (want_flags & 1u) ? "on" : "off",
                     (want_flags & 2u) ? "on" : "off", g_c444 ? " (not used while full colour is on)" : "");
         }
@@ -1300,3 +1309,5 @@ void slp_substitute_brake(const char *why)
     if (n <= 50 || n % 50 == 0)
         slp_log("[SUB] BRAKE #%llu (%s): multiplier %.2f -> %.2f", (unsigned long long)n, why, before, after);
 }
+
+bool slp_atlas_stacked() { return atlas_stacked(); }
