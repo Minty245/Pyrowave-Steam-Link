@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.2.0-beta.1 (pre-release)
+
+- **AMD GPUs (experimental):** Pyrowave now also takes over Steam Link's AMF HEVC encoder on AMD cards (thanks to
+  S.F. van Rooden, PR #1). AMD's own encoder still runs alongside, so AMD users pay for both encodes, and latency on
+  AMD won't match the NVIDIA numbers. `%TEMP%\slp_amf_off` turns the AMD hook off.
+- On AMD, Steam Link lays out the views 2x2 instead of stacked, so the foveation extras (PC prefilter, region weights,
+  per-view chroma edges, headset filters, edge ramp) are off there: AMD gets plain Pyrowave. NVIDIA is unchanged.
+
 ## 1.1.0 - 2026-11-17
 
 Headset support for HEVC full colour from [Steam Link Full Colour](https://github.com/Minty245/Steam-Link-Full-Colour)
